@@ -1,0 +1,30 @@
+name: Run Python Script Hourly
+
+on:
+  schedule:
+    - cron: '0 * * * *' # Runs exactly at the start of every hour
+  workflow_dispatch: # Allows you to run it manually for testing
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Allows the script to save the HTML back to GitHub
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run Python script
+        run: python predict_html.py
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@://
+
+          
