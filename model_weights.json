@@ -1,0 +1,223 @@
+{
+    "global_fallback_bias": 0.10445142442571563,
+    "global_fx1_fallback_bias": -2.2865097700709645,
+    "category_mean_offsets": {
+        "Cloudy": -0.6335654888408913,
+        "Cloudy + Precip(Other_Precip)": 0.3991942041756662,
+        "Cloudy + Precip(Rain)": -0.15471322419006417,
+        "Foehn + Cloudy + Precip(Other_Precip)": 3.7443996463642915,
+        "Foehn + Cloudy + Precip(Rain)": -0.22950129589632784,
+        "Foehn + PartlyCloudy": -0.20851441572797186,
+        "Foehn + PartlyCloudy + Precip(Other_Precip)": 4.167365809071275,
+        "Foehn + PartlyCloudy + Precip(Rain)": 5.604730056155508,
+        "Foehn + PartlyCloudy + Precip(Thunderstorm)": 7.876506786465082,
+        "Foehn + Sunny": -0.7769496468826489,
+        "PartlyCloudy": -0.3300630421166302,
+        "PartlyCloudy + Precip(Other_Precip)": 0.8059599219582434,
+        "Sudfoehn + PartlyCloudy": 2.342796851451884,
+        "Sudfoehn + PartlyCloudy + Precip(Thunderstorm)": 0.48522267185025303,
+        "Sudfoehn + Sunny": -0.5546198049288361,
+        "Sunny": -0.5606480149157291,
+        "Sunny + Precip(Other_Precip)": -2.4874171807055427
+    },
+    "category_fx1_mean_offsets": {
+        "Cloudy": -1.5745440933045352,
+        "Cloudy + Precip(Other_Precip)": -0.6857728812095019,
+        "Cloudy + Precip(Rain)": 1.1376595257019448,
+        "Foehn + Cloudy + Precip(Other_Precip)": -4.589672138228938,
+        "Foehn + Cloudy + Precip(Rain)": -1.9676361053995652,
+        "Foehn + PartlyCloudy": -2.36488128579498,
+        "Foehn + PartlyCloudy + Precip(Other_Precip)": 2.0474815170626357,
+        "Foehn + PartlyCloudy + Precip(Rain)": 4.676709261915049,
+        "Foehn + PartlyCloudy + Precip(Thunderstorm)": -0.7408577071274269,
+        "Foehn + Sunny": -2.7952902137365,
+        "PartlyCloudy": -3.4511614984881205,
+        "PartlyCloudy + Precip(Other_Precip)": 1.1765335179265661,
+        "Sudfoehn + PartlyCloudy": 2.2146540032829383,
+        "Sudfoehn + PartlyCloudy + Precip(Thunderstorm)": -4.971956927861768,
+        "Sudfoehn + Sunny": -2.8478460110981874,
+        "Sunny": -3.6704610255081116,
+        "Sunny + Precip(Other_Precip)": -12.5313521762419
+    },
+    "category_angles": {
+        "DEFAULT": 10.0
+    },
+    "bayesian_models": {
+        "Foehn + PartlyCloudy": {
+            "features": [
+                "mosmix_u_kt",
+                "mosmix_ff_kt"
+            ],
+            "scaler_mean": [
+                -4.930001952896763,
+                9.460519753846153
+            ],
+            "scaler_scale": [
+                0.6998498184546547,
+                0.9263962821558118
+            ],
+            "coef": [
+                -1.0494002624420402,
+                0.5164548764086856
+            ],
+            "intercept": -0.9732030796850307
+        },
+        "Foehn + Sunny": {
+            "features": [
+                "mosmix_ff_kt"
+            ],
+            "scaler_mean": [
+                10.298464319999999
+            ],
+            "scaler_scale": [
+                1.1861820724520942
+            ],
+            "coef": [
+                0.7408081980065572
+            ],
+            "intercept": -0.9040685541452564
+        },
+        "PartlyCloudy": {
+            "features": [
+                "mosmix_tt_c"
+            ],
+            "scaler_mean": [
+                21.418750000000024
+            ],
+            "scaler_scale": [
+                2.4983041122929697
+            ],
+            "coef": [
+                1.1914412103387164
+            ],
+            "intercept": -0.6003394135492945
+        },
+        "Sudfoehn + Sunny": {
+            "features": [
+                "mosmix_rad_kj"
+            ],
+            "scaler_mean": [
+                2.8092307692307696
+            ],
+            "scaler_scale": [
+                0.23860045581430245
+            ],
+            "coef": [
+                -0.30779152621064115
+            ],
+            "intercept": -0.8414850969903144
+        },
+        "Sunny": {
+            "features": [
+                "mosmix_dd_cross_valley",
+                "mosmix_v_kt",
+                "mosmix_rad_kj"
+            ],
+            "scaler_mean": [
+                0.3208017412339182,
+                -4.851844908098599,
+                3.0233333333333334
+            ],
+            "scaler_scale": [
+                0.26673410927681435,
+                3.6331862677825297,
+                0.4426339190852711
+            ],
+            "coef": [
+                0.4487034256839477,
+                0.4447747415252052,
+                0.2820029904995245
+            ],
+            "intercept": -1.0982558415293042
+        }
+    },
+    "bayesian_fx1_models": {
+        "Foehn + PartlyCloudy": {
+            "features": [
+                "mosmix_dp_foehn",
+                "mosmix_u_kt"
+            ],
+            "scaler_mean": [
+                4.653846153846162,
+                -4.930001952896763
+            ],
+            "scaler_scale": [
+                0.8665718352001238,
+                0.6998498184546547
+            ],
+            "coef": [
+                1.4172550788304323,
+                0.08152867476918253
+            ],
+            "intercept": -2.366738007997292
+        },
+        "Foehn + Sunny": {
+            "features": [
+                "mosmix_ff_kt"
+            ],
+            "scaler_mean": [
+                10.298464319999999
+            ],
+            "scaler_scale": [
+                1.1861820724520942
+            ],
+            "coef": [
+                1.7292414131245761
+            ],
+            "intercept": -2.795290406401218
+        },
+        "PartlyCloudy": {
+            "features": [
+                "mosmix_v_kt"
+            ],
+            "scaler_mean": [
+                -3.003316199620253
+            ],
+            "scaler_scale": [
+                4.196462821266629
+            ],
+            "coef": [
+                -2.634703903524055
+            ],
+            "intercept": -4.146759639065481
+        },
+        "Sudfoehn + Sunny": {
+            "features": [
+                "mosmix_cloud_pct"
+            ],
+            "scaler_mean": [
+                19.23076923076923
+            ],
+            "scaler_scale": [
+                9.039688951029285
+            ],
+            "coef": [
+                1.2371678317589747
+            ],
+            "intercept": -3.0185497239628685
+        },
+        "Sunny": {
+            "features": [
+                "mosmix_cloud_pct",
+                "mosmix_rad_kj",
+                "mosmix_ff_kt"
+            ],
+            "scaler_mean": [
+                8.948717948717949,
+                3.0233333333333334,
+                6.898139897435897
+            ],
+            "scaler_scale": [
+                8.989876693911276,
+                0.4426339190852711,
+                1.838480392260456
+            ],
+            "coef": [
+                -0.6834009878930817,
+                0.03774010793950781,
+                0.8670441981405491
+            ],
+            "intercept": -3.9369858943064435
+        }
+    }
+}
