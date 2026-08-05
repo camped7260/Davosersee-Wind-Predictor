@@ -15,7 +15,7 @@ import os
 import sys
 import zipfile
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -440,25 +440,72 @@ def fetch_openmeteo(lat, lon, start_date, end_date):
         print(f"⚠️ Error fetching Open-Meteo: {e}")
     return None
 
-def fetch_dssc_data(target_date):
-    """Fetches realtime observations from DSSC station."""
+# =====================================================================
+# FETCH & PROCESS DSSC DATA
+# =====================================================================
+def fetch_dssc_data(endpoint_name):
+    url = f"https://www.dssc.ch/cumulusmx/{endpoint_name}.json"
+    headers = {'User-Agent': 'Mozilla/5.0 (Ubuntu; Linux x86_64) WingfoilPredictor/1.0'}
     try:
-        ws_res = requests.get("https://www.dssc.ch/cumulusmx/wind.json", timeout=5).json()
-        hourly_obs = {}
-        if ws_res:
-            for ts, val_kmh in ws_res.get("wspeed", []):
-                dt = datetime.fromtimestamp(ts / 1000)
-                if dt.strftime("%Y-%m-%d") == target_date:
-                    h_str = dt.strftime("%H:00")
-                    hourly_obs.setdefault(h_str, {})["speed"] = convert_kmh_to_knots(val_kmh)
-            for ts, val_kmh in ws_res.get("wgust", []):
-                dt = datetime.fromtimestamp(ts / 1000)
-                if dt.strftime("%Y-%m-%d") == target_date:
-                    h_str = dt.strftime("%H:00")
-                    hourly_obs.setdefault(h_str, {})["gust"] = convert_kmh_to_knots(val_kmh)
-        return hourly_obs
-    except Exception:
-        return {}
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+    except Exception as e:
+        print(f"[⚠️ Warning] Station DSSC ({endpoint_name}) indisponible : {e}")
+    return None
+
+def process_dssc_hourly(wind_data, wind_dir_data, temp_data, target_date):
+    hourly_raw = {f"{h:02d}:00": {"speeds": [], "gusts": [], "dirs": [], "temps": []} for h in range(0, 24)}
+    
+    if wind_data:
+        for timestamp, val_kmh in wind_data.get("wspeed", []):
+            dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+            time_str = dt.strftime("%H:00")
+            if dt.strftime("%Y-%m-%d") == target_date and time_str in hourly_raw:
+                hourly_raw[time_str]["speeds"].append(val_kmh)
+                
+        for timestamp, val_kmh in wind_data.get("wgust", []):
+            dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+            time_str = dt.strftime("%H:00")
+            if dt.strftime("%Y-%m-%d") == target_date and time_str in hourly_raw:
+                hourly_raw[time_str]["gusts"].append(val_kmh)
+
+    if wind_dir_data:
+        for timestamp, val_deg in wind_dir_data.get("avgbearing", []):
+            dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+            time_str = dt.strftime("%H:00")
+            if dt.strftime("%Y-%m-%d") == target_date and time_str in hourly_raw:
+                hourly_raw[time_str]["dirs"].append(val_deg)
+
+    if temp_data:
+        temp_key = "temp" if "temp" in temp_data else next(iter(temp_data.keys()), None)
+        if temp_key and isinstance(temp_data.get(temp_key), list):
+            for timestamp, val_c in temp_data[temp_key]:
+                dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+                time_str = dt.strftime("%H:00")
+                if dt.strftime("%Y-%m-%d") == target_date and time_str in hourly_raw:
+                    hourly_raw[time_str]["temps"].append(val_c)
+                 
+    hourly_obs = {}
+    for hour, data in hourly_raw.items():
+        if data["speeds"] or data["temps"] or data["dirs"]:
+            avg_dir = None
+            if data["dirs"]:
+                sin_sum = sum(np.sin(np.radians(d)) for d in data["dirs"])
+                cos_sum = sum(np.cos(np.radians(d)) for d in data["dirs"])
+                R = np.hypot(sin_sum, cos_sum)
+                if R > 1e-5:
+                    avg_dir = float(np.degrees(np.arctan2(sin_sum, cos_sum)) % 360)
+
+            hourly_obs[hour] = {
+                "speed": convert_kmh_to_knots(sum(data["speeds"]) / len(data["speeds"])) if data["speeds"] else None,
+                "gust": convert_kmh_to_knots(max(data["gusts"])) if data["gusts"] else (convert_kmh_to_knots(max(data["speeds"])) if data["speeds"] else None),
+                "dir": avg_dir,
+                "temp": sum(data["temps"]) / len(data["temps"]) if data["temps"] else None
+            }
+        else:
+            hourly_obs[hour] = None
+    return hourly_obs
 
 # =====================================================================
 # GRAPH GENERATION
@@ -482,9 +529,18 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path):
     ax.plot(hours, corr_fx, label="Gust Corrected", color="#e67e22", linewidth=2.2)
 
     if dssc_obs:
-        obs_h = [int(k.split(":")[0]) for k in dssc_obs.keys() if "speed" in dssc_obs[k]]
-        obs_sp = [dssc_obs[k]["speed"] for k in dssc_obs.keys() if "speed" in dssc_obs[k]]
-        ax.scatter(obs_h, obs_sp, color="#e74c3c", label="DSSC Obs", zorder=5, s=30)
+        obs_h = [
+            int(k.split(":")[0]) 
+            for k, v in dssc_obs.items() 
+            if v is not None and "speed" in v and v["speed"] is not None
+        ]
+        obs_sp = [
+            v["speed"] 
+            for k, v in dssc_obs.items() 
+            if v is not None and "speed" in v and v["speed"] is not None
+        ]
+        if obs_h:
+            ax.scatter(obs_h, obs_sp, color="#e74c3c", label="Observation", zorder=5, s=30)
 
     ax.axhline(CONFIG["settings"]["wind_threshold_knots"], color="#e74c3c", linestyle=":", alpha=0.7, label="Threshold (10kt)")
     
@@ -653,12 +709,18 @@ def main():
     for d_str in dates:
         df_day = df_predicted[df_predicted.index.strftime("%Y-%m-%d") == d_str]
         if not df_day.empty:
-            dssc_obs = fetch_dssc_data(d_str) if args.include_dssc else {}
+            dssc_hourly = None
+            if args.include_dssc:
+                dssc_wind = fetch_dssc_data("winddata")
+                dssc_wind_dir = fetch_dssc_data("wdirdata")
+                dssc_temp = fetch_dssc_data("tempdata")
+                dssc_hourly = process_dssc_hourly(dssc_wind, dssc_wind_dir, dssc_temp, d_str)
+
             graph_name = f"graph_{d_str}.png"
-            generate_day_graph(d_str, df_day, dssc_obs, graph_name)
+            generate_day_graph(d_str, df_day, dssc_hourly, graph_name)
             days_data[d_str] = {
                 "df": df_day,
-                "dssc": dssc_obs,
+                "dssc": dssc_hourly,  # Fixed variable reference
                 "graph_name": graph_name
             }
 
