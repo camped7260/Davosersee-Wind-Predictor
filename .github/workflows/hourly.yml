@@ -17,14 +17,21 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.11'
+
+      # 🛠️ NEW STEP: Installs numpy before running your prediction script
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy
 
       - name: Run Python script
         run: python predict_html.py
 
+      # 📝 FIXED STEP: Correctly formats the Git bot configuration and saves changes
       - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@://
-
-          
+          git config --global user.email "41898282+github-actions[bot]@://github.com"
+          git add .
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Automated hourly HTML update" && git push)
