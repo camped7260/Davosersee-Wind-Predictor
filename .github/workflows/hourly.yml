@@ -2,14 +2,14 @@ name: Run Python Script Hourly
 
 on:
   schedule:
-    - cron: '0 * * * *' # Runs exactly at the start of every hour
-  workflow_dispatch: # Allows you to run it manually for testing
+    - cron: '0 * * * *'
+  workflow_dispatch:
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Allows the script to save the HTML back to GitHub
+      contents: write
     steps:
       - name: Checkout repository code
         uses: actions/checkout@v4
@@ -19,16 +19,14 @@ jobs:
         with:
           python-version: '3.11'
 
-      # 🛠️ NEW STEP: Installs numpy before running your prediction script
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install numpy
+          python -m pip install numpy
 
       - name: Run Python script
         run: python predict_html.py
 
-      # 📝 FIXED STEP: Correctly formats the Git bot configuration and saves changes
       - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
