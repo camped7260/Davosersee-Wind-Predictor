@@ -1,1 +1,1 @@
-numpy pandas requests matplotlib
+numpy; pandas; requests; matplotlib
