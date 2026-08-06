@@ -2,7 +2,7 @@ name: Run Python Script Hourly
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '23 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -30,6 +30,6 @@ jobs:
       - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@://users.noreply.github.com"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add index.html *.png
           git diff --quiet && git diff --staged --quiet || (git commit -m "Automated hourly HTML update" && git push)
