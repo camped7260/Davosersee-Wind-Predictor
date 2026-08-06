@@ -2,7 +2,7 @@ name: Run Python Script Hourly
 
 on:
   schedule:
-    - cron: "41 * * * *"
+    - cron: "57 * * * *"
   workflow_dispatch:
 
 permissions:
