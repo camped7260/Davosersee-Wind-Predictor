@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-predict.py
+predict_html.py
 
 Standalone prediction & HTML dashboard generator for Wingfoil forecasting (Davos).
 Runs predictions for today and tomorrow by loading 
-weights, features, scalers, and offsets dynamically from `weights.json`.
+weights, features, scalers, and offsets dynamically from `model_weights.json`.
 """
 
 import argparse
@@ -68,45 +68,8 @@ DEFAULT_WEIGHTS = {
         "Foehn + Sunny": 12.0,
         "Foehn + PartlyCloudy": 12.0
     },
-    "bayesian_models": {
-        "Sunny": {
-            "features": ["om_syn_ff_kt", "om_syn_dd_along_valley", "om_syn_dd_cross_valley"],
-            "scaler_mean": [12.4, 0.15, -0.05],
-            "scaler_scale": [4.2, 0.65, 0.70],
-            "coef": [0.85, -0.42, 0.18],
-            "intercept": 0.48
-        },
-        "PartlyCloudy": {
-            "features": ["mosmix_ff_kt", "mosmix_rad_kj", "om_syn_dd_cross_valley"],
-            "scaler_mean": [8.5, 1800.0, 0.02],
-            "scaler_scale": [3.1, 600.0, 0.68],
-            "coef": [0.62, -0.25, 0.12],
-            "intercept": 0.35
-        },
-        "Foehn + PartlyCloudy": {
-            "features": ["mosmix_dp_foehn", "mosmix_cloud_pct", "om_prec_prob"],
-            "scaler_mean": [5.2, 45.0, 15.0],
-            "scaler_scale": [2.1, 15.0, 10.0],
-            "coef": [-1.45, 0.35, -0.15],
-            "intercept": -0.92
-        }
-    },
-    "bayesian_fx1_models": {
-        "Sunny": {
-            "features": ["mosmix_fx1_kt", "om_syn_ff_kt", "om_syn_dd_along_valley"],
-            "scaler_mean": [18.2, 12.4, 0.15],
-            "scaler_scale": [5.1, 4.2, 0.65],
-            "coef": [0.92, 0.35, -0.20],
-            "intercept": 1.05
-        },
-        "Foehn + PartlyCloudy": {
-            "features": ["mosmix_fx1_kt", "mosmix_dp_foehn", "mosmix_cloud_pct"],
-            "scaler_mean": [22.0, 5.2, 45.0],
-            "scaler_scale": [6.0, 2.1, 15.0],
-            "coef": [0.78, -0.95, 0.18],
-            "intercept": -0.15
-        }
-    }
+    "bayesian_models": {},
+    "bayesian_fx1_models": {}
 }
 
 def load_exported_weights(json_path="model_weights.json"):
@@ -125,8 +88,15 @@ def load_exported_weights(json_path="model_weights.json"):
 
 EXPORTED_WEIGHTS = load_exported_weights("model_weights.json")
 
-# Extract version string using version and updated_at timestamp from the weights JSON
-VERSION = f"{EXPORTED_WEIGHTS.get('version', 'v2.5-json')} ({EXPORTED_WEIGHTS.get('updated_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC'))})"
+def get_formatted_version_and_build():
+    """Returns the weights export timestamp and local HTML build timestamp."""
+    weights_updated = EXPORTED_WEIGHTS.get("updated_at", "Unknown")
+    version_str = EXPORTED_WEIGHTS.get("version", "v2.5-json")
+    
+    local_now = datetime.now().astimezone()
+    build_time_str = local_now.strftime("%Y-%m-%d %H:%M:%S %Z")
+    
+    return version_str, weights_updated, build_time_str
 
 REGIME_COLORS = {
     "Sunny": "#fff9db",
@@ -570,6 +540,8 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path):
 # =====================================================================
 
 def generate_mobile_html(days_data, output_file="index.html"):
+    version_str, weights_updated, build_time_str = get_formatted_version_and_build()
+
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -580,7 +552,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f8f9fa; margin: 0; padding: 12px; color: #212529; }}
         .header {{ background: #1e293b; color: white; padding: 14px; border-radius: 10px; margin-bottom: 12px; }}
         .header h1 {{ margin: 0; font-size: 1.2rem; }}
-        .version {{ font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }}
+        .version {{ font-size: 0.75rem; color: #94a3b8; margin-top: 4px; line-height: 1.4; }}
         .day-card {{ background: white; border-radius: 10px; padding: 12px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow-x: auto; }}
         .day-title {{ font-weight: bold; font-size: 1.1rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }}
         .badge {{ padding: 3px 8px; border-radius: 12px; font-size: 0.75rem; color: white; }}
@@ -596,7 +568,10 @@ def generate_mobile_html(days_data, output_file="index.html"):
     <div class="header">
         <h1>🏄 Davosersee Wind Forecast by Camille, DWD MOSMIX-L data with corrections</h1>
         <h1>-- experimental, at your own risk, no guarantees! --</h1>
-        <div class="version">Generated: {VERSION}</div>
+        <div class="version">
+            Build Time: {build_time_str}<br>
+            Model Weights Version: {version_str} (Exported: {weights_updated})
+        </div>
     </div>
 """
 
@@ -676,11 +651,12 @@ def main():
     parser.add_argument("--weights-file", type=str, default="model_weights.json", help="Path to weights JSON file")
     args = parser.parse_args()
 
-    global EXPORTED_WEIGHTS, VERSION
+    global EXPORTED_WEIGHTS
     EXPORTED_WEIGHTS = load_exported_weights(args.weights_file)
-    VERSION = f"{EXPORTED_WEIGHTS.get('version', 'v2.5-json')} ({EXPORTED_WEIGHTS.get('updated_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC'))})"
+    version_str, weights_updated, build_time_str = get_formatted_version_and_build()
 
-    print(f"🚀 Running Wingfoil Prediction Engine [{VERSION}]")
+    print(f"🚀 Running Wingfoil Prediction Engine [{version_str} - Exported: {weights_updated}]")
+    print(f"🕒 Build Time: {build_time_str}")
     if args.include_dssc:
         print("📡 DSSC Realtime Observations: ENABLED")
     else:
@@ -692,6 +668,7 @@ def main():
 
     today = datetime.now()
     dates = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(2)]
+    img_names = ["today.png", "tomorrow.png"]
 
     df_mosmix = fetch_mosmix(station_id)
     df_om = fetch_openmeteo(lat, lon, dates[0], dates[-1])
@@ -706,7 +683,7 @@ def main():
     df_predicted = predictor.predict(df_combined)
 
     days_data = {}
-    for d_str in dates:
+    for i, d_str in enumerate(dates):
         df_day = df_predicted[df_predicted.index.strftime("%Y-%m-%d") == d_str]
         if not df_day.empty:
             dssc_hourly = None
@@ -716,11 +693,11 @@ def main():
                 dssc_temp = fetch_dssc_data("tempdata")
                 dssc_hourly = process_dssc_hourly(dssc_wind, dssc_wind_dir, dssc_temp, d_str)
 
-            graph_name = f"graph_{d_str}.png"
+            graph_name = img_names[i]
             generate_day_graph(d_str, df_day, dssc_hourly, graph_name)
             days_data[d_str] = {
                 "df": df_day,
-                "dssc": dssc_hourly,  # Fixed variable reference
+                "dssc": dssc_hourly,
                 "graph_name": graph_name
             }
 
