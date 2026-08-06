@@ -6,14 +6,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read # Changed from write (no longer pushing commits)
-  pages: write   # Required for Pages deployment
-  id-token: write # Required for OIDC authentication
+  contents: read
+  pages: write
+  id-token: write
 
-# Prevent concurrent deployments from queueing/hanging
 concurrency:
   group: "pages"
   cancel-in-progress: true
+
+env:
+  MPLBACKEND: "Agg" # Fast, headless rendering for Matplotlib (today.png / tomorrow.png)
 
 jobs:
   run-script:
@@ -28,24 +30,17 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Python & uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          enable-cache: true # Caches package wheels only, not weather data
 
       - name: Install dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: uv pip install -r requirements.txt --system
 
       - name: Run prediction script
-        shell: bash
-        run: |
-          set -euo pipefail
-          python predict_html.py --include-dssc
+        run: python -O predict_html.py --include-dssc
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -53,7 +48,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.' # Uploads the folder containing index.html
+          path: '.'
 
       - name: Deploy to GitHub Pages
         id: deployment
