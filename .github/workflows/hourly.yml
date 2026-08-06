@@ -2,42 +2,77 @@ name: Run Python Script Hourly
 
 on:
   schedule:
-    - cron: '23 * * * *'
+    - cron: "23 * * * *"
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: davosersee-wind-predictor
+  cancel-in-progress: false
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+
     steps:
-      - name: Checkout repository code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Show workflow context
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "UTC time:"
+          date -u
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          pip install -r requirements.txt
 
-      - name: Run Python script
-        run: python predict_html.py --include-dssc
+      - name: Run prediction script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python predict_html.py --include-dssc
 
       - name: Commit and push changes
+        shell: bash
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           [ -f index.html ] && git add index.html
-          git add *.png 2>/dev/null || true
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-          else
-            git commit -m "Automated hourly HTML update"
-            git push
+
+          shopt -s nullglob
+          pngs=( *.png )
+          if [ ${#pngs[@]} -gt 0 ]; then
+            git add "${pngs[@]}"
           fi
+
+          if git diff --cached --quiet; then
+            echo "No changes detected."
+            exit 0
+          fi
+
+          git commit -m "Automated hourly HTML update"
+
+          # Rebase in case new commits landed while this workflow ran.
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+
+          git push
