@@ -71,8 +71,4 @@ jobs:
           fi
 
           git commit -m "Automated hourly HTML update"
-
-          # Rebase in case new commits landed while this workflow ran.
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-
           git push
