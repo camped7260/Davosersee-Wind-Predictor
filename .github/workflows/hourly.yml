@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read # Changed from write (no longer pushing commits)
-  pages: write   # Required for Pages deployment
-  id-token: write # Required for OIDC authentication
+  contents: read
+  pages: write     # Required for Pages deployment
+  id-token: write  # Required for OIDC authentication
 
 # Prevent concurrent deployments from queueing/hanging
 concurrency:
@@ -47,13 +47,20 @@ jobs:
           set -euo pipefail
           python predict_html.py --include-dssc
 
+      - name: Organize build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public
+          mv index.html today.png tomorrow.png public/
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.' # Uploads the folder containing index.html
+          path: 'public'  # Point directly to the folder containing the web assets
 
       - name: Deploy to GitHub Pages
         id: deployment
