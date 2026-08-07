@@ -16,6 +16,7 @@ import sys
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import numpy as np
@@ -93,7 +94,8 @@ def get_formatted_version_and_build():
     weights_updated = EXPORTED_WEIGHTS.get("updated_at", "Unknown")
     version_str = EXPORTED_WEIGHTS.get("version", "v2.5-json")
     
-    local_now = datetime.now().astimezone()
+    tz_name = CONFIG["settings"]["timezone"]
+    local_now = datetime.now(ZoneInfo(tz_name))
     build_time_str = local_now.strftime("%Y-%m-%d %H:%M:%S %Z")
     
     return version_str, weights_updated, build_time_str
@@ -570,7 +572,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
         <h1>-- experimental, at your own risk, no guarantees! --</h1>
         <div class="version">
             Build Time: {build_time_str}<br>
-            Model Weights Version: {version_str} (Exported: {weights_updated})
+            Model Weights Version: {weights_updated}
         </div>
     </div>
 """

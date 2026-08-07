@@ -1,17 +1,17 @@
 {
     "version": "MOSMIX_V14",
-    "updated_at": "2026-08-06 14:04:03 CEST",
-    "global_fallback_bias": 0.030374103432642442,
-    "global_fx1_fallback_bias": -2.3932880594043726,
+    "updated_at": "2026-08-07 09:14:57 CEST",
+    "global_fallback_bias": 0.006001628618620382,
+    "global_fx1_fallback_bias": -2.4517595176327105,
     "category_mean_offsets": {
         "Cloudy": -0.6335654888408913,
         "Cloudy + Precip(Other_Precip)": 0.3991942041756662,
         "Cloudy + Precip(Rain)": -0.15471322419006417,
         "Foehn + Cloudy + Precip(Other_Precip)": 3.7443996463642915,
         "Foehn + Cloudy + Precip(Rain)": -0.22950129589632784,
-        "Foehn + PartlyCloudy": -0.3622475133649133,
-        "Foehn + PartlyCloudy + Precip(Other_Precip)": 4.167365809071275,
-        "Foehn + PartlyCloudy + Precip(Rain)": 5.604730056155508,
+        "Foehn + PartlyCloudy": -0.4224172472778722,
+        "Foehn + PartlyCloudy + Precip(Other_Precip)": 0.21655878857691402,
+        "Foehn + PartlyCloudy + Precip(Rain)": 4.477794537077034,
         "Foehn + PartlyCloudy + Precip(Thunderstorm)": 7.876506786465082,
         "Foehn + Sunny": -0.7769496468826489,
         "PartlyCloudy": -0.3300630421166302,
@@ -28,9 +28,9 @@
         "Cloudy + Precip(Rain)": 1.1376595257019448,
         "Foehn + Cloudy + Precip(Other_Precip)": -4.589672138228938,
         "Foehn + Cloudy + Precip(Rain)": -1.9676361053995652,
-        "Foehn + PartlyCloudy": -2.424827887071889,
-        "Foehn + PartlyCloudy + Precip(Other_Precip)": 2.0474815170626357,
-        "Foehn + PartlyCloudy + Precip(Rain)": 4.676709261915049,
+        "Foehn + PartlyCloudy": -2.5126599229611952,
+        "Foehn + PartlyCloudy + Precip(Other_Precip)": -1.9942774485241153,
+        "Foehn + PartlyCloudy + Precip(Rain)": 2.562597713174949,
         "Foehn + PartlyCloudy + Precip(Thunderstorm)": -0.7408577071274269,
         "Foehn + Sunny": -2.7952902137365,
         "PartlyCloudy": -3.4511614984881205,
@@ -48,21 +48,21 @@
         "Foehn + PartlyCloudy": {
             "features": [
                 "mosmix_u_kt",
-                "mosmix_ff_kt"
+                "mosmix_dp_foehn"
             ],
             "scaler_mean": [
-                -4.859109206526276,
-                9.499129542857144
+                -4.857864691613493,
+                4.634482758620697
             ],
             "scaler_scale": [
-                0.7459024841539061,
-                0.9422692051213124
+                0.7329588614315041,
+                0.8234811984407885
             ],
             "coef": [
-                -1.1169297577733637,
-                0.4656628358949539
+                -1.1474410721257189,
+                0.37487019819853673
             ],
-            "intercept": -1.0757443659908492
+            "intercept": -1.0786115006029364
         },
         "Foehn + Sunny": {
             "features": [
@@ -140,18 +140,18 @@
                 "mosmix_u_kt"
             ],
             "scaler_mean": [
-                4.639285714285721,
-                -4.859109206526276
+                4.634482758620697,
+                -4.857864691613493
             ],
             "scaler_scale": [
-                0.8376579960624326,
-                0.7459024841539061
+                0.8234811984407885,
+                0.7329588614315041
             ],
             "coef": [
-                1.291756147688433,
-                -0.05425819681164534
+                1.2884368641184898,
+                -0.04752441859560086
             ],
-            "intercept": -2.4265766051323836
+            "intercept": -2.514378758876153
         },
         "Foehn + Sunny": {
             "features": [
