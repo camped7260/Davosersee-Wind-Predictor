@@ -483,7 +483,7 @@ def process_dssc_hourly(wind_data, wind_dir_data, temp_data, target_date):
 # GRAPH GENERATION
 # =====================================================================
 
-def generate_day_graph(date_str, df_day, dssc_obs, output_path):
+def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=None):
     fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
     hours = df_day.index.hour
     
@@ -533,6 +533,17 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path):
     ax.grid(True, linestyle=":", alpha=0.6)
     ax.legend(loc="upper right", fontsize=7, framealpha=0.8)
 
+    if build_time_str:
+        fig.text(
+            0.98, 0.01, 
+            f"Generated: {build_time_str}", 
+            fontsize=6, 
+            color="#7f8c8d", 
+            ha="right", 
+            va="bottom", 
+            style="italic"
+        )
+    
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
@@ -696,7 +707,7 @@ def main():
                 dssc_hourly = process_dssc_hourly(dssc_wind, dssc_wind_dir, dssc_temp, d_str)
 
             graph_name = img_names[i]
-            generate_day_graph(d_str, df_day, dssc_hourly, graph_name)
+            generate_day_graph(d_str, df_day, dssc_hourly, graph_name, build_time_str=build_time_str)
             days_data[d_str] = {
                 "df": df_day,
                 "dssc": dssc_hourly,
