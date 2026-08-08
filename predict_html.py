@@ -258,7 +258,7 @@ class StandaloneWindPredictor:
         is_rain = code_known and ((50 <= int(w_code) <= 69) or (80 <= int(w_code) <= 82))
         
         triggers = (prec_prob > 50.0 and is_rain) or (prec_prob > 75.0) if code_known else prec_prob > 50.0
-        floor = 0.75 if code_known else 0.875
+        floor = 0.33 if code_known else 0.66
         
         if triggers:
             factor = max(floor, 1.0 - ((1.0 - floor) * (prec_prob / 100.0)))
@@ -527,9 +527,12 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
     ax.set_yticks(y_ticks)
     ax.set_yticklabels(y_labels)
 
+    dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
+    date_with_weekday = dt_obj.strftime("%A, %Y-%m-%d")
+
     ax.set_xlabel("Local Hour")
     ax.set_ylabel("Wind Speed (knots)")
-    ax.set_title(f"Davosersee Forecast — {date_str}", fontsize=11, fontweight="bold")
+    ax.set_title(f"Davosersee Forecast — {date_with_weekday}", fontsize=11, fontweight="bold")
     ax.grid(True, linestyle=":", alpha=0.6)
     ax.legend(loc="upper right", fontsize=7, framealpha=0.8)
 
@@ -590,7 +593,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
 
     for date_str, data in days_data.items():
         max_ff = data["df"]["mosmix_ff_corrected_kt"].max()
-        status_badge = '<span class="badge bg-go">🟢 WINGFOIL</span>' if max_ff >= 10.0 else '<span class="badge bg-nogo">🔴 NO WIND</span>'
+        status_badge = '<span class="badge bg-go">🟢 WIN*FOIL</span>' if max_ff >= 10.0 else '<span class="badge bg-nogo">🔴 avg.Wind<10kt </span>'
         
         html_content += f"""
     <div class="day-card">
@@ -610,7 +613,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
                     <th>Temp (°C)</th>
                     <th>Cloud (%)</th>
                     <th>Rain Prob (%)</th>
-                    <th>Foehn Grad (hPa)</th>
+                    <th>Nordfoehn Grad (hPa)</th>
                     <th>Regime</th>
                 </tr>
             </thead>
@@ -680,8 +683,8 @@ def main():
     lon = CONFIG["locations"]["davos"]["lon"]
 
     today = datetime.now()
-    dates = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(2)]
-    img_names = ["today.png", "tomorrow.png"]
+    dates = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(3)]
+    img_names = ["today.png", "tomorrow.png", "dayaftertomorrow.png"]
 
     df_mosmix = fetch_mosmix(station_id)
     df_om = fetch_openmeteo(lat, lon, dates[0], dates[-1])
