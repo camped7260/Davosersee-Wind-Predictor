@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p public
-          mv index.html today.png tomorrow.png public/
+          mv index.html today.png tomorrow.png dayaftertomorrow.png public/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
