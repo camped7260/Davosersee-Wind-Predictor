@@ -1,8 +1,8 @@
 {
     "version": "MOSMIX_V14",
-    "updated_at": "2026-08-08 16:30:34 CEST",
-    "global_fallback_bias": 0.17244016828039857,
-    "global_fx1_fallback_bias": -2.2603318034341235,
+    "updated_at": "2026-08-10 19:10:08 CEST",
+    "global_fallback_bias": 0.23682935176482894,
+    "global_fx1_fallback_bias": -2.1599453176377645,
     "category_mean_offsets": {
         "Cloudy": -0.6335654888408913,
         "Cloudy + Precip(Other_Precip)": 0.3991942041756662,
@@ -20,7 +20,7 @@
         "Sudfoehn + PartlyCloudy": 2.342796851451884,
         "Sudfoehn + PartlyCloudy + Precip(Thunderstorm)": 0.48522267185025303,
         "Sudfoehn + Sunny": -0.5546198049288361,
-        "Sunny": -0.5317380133175171,
+        "Sunny": -0.20590547848551655,
         "Sunny + Precip(Other_Precip)": -2.4874171807055427
     },
     "category_fx1_mean_offsets": {
@@ -40,11 +40,12 @@
         "Sudfoehn + PartlyCloudy": 2.2146540032829383,
         "Sudfoehn + PartlyCloudy + Precip(Thunderstorm)": -4.971956927861768,
         "Sudfoehn + Sunny": -2.8478460110981874,
-        "Sunny": -3.701889487821896,
+        "Sunny": -3.116949185132651,
         "Sunny + Precip(Other_Precip)": -12.5313521762419
     },
     "category_angles": {
-        "DEFAULT": 10.0
+        "DEFAULT": 10.0,
+        "Sunny": 24.0
     },
     "bayesian_models": {
         "Foehn + PartlyCloudy": {
@@ -113,26 +114,26 @@
         },
         "Sunny": {
             "features": [
+                "mosmix_cloud_pct",
                 "mosmix_dd_cross_valley",
-                "mosmix_u_kt",
-                "mosmix_cloud_pct"
+                "om_syn_dd_cross_valley"
             ],
             "scaler_mean": [
-                0.3168401743385952,
-                -3.3149321001079817,
-                11.384615384615385
+                13.626865671641792,
+                0.11052251826695769,
+                -0.7199518254075449
             ],
             "scaler_scale": [
-                0.2318681574195819,
-                1.9245274992437473,
-                9.553802799356605
+                9.8205325886756,
+                0.1790543383872247,
+                0.28328244960192006
             ],
             "coef": [
-                0.21620785754685376,
-                -0.1384340239346561,
-                0.18031962136967908
+                0.49194886904098517,
+                0.2297361741960746,
+                -0.3280768772291439
             ],
-            "intercept": -1.0852031765390515
+            "intercept": -0.7198593768856234
         }
     },
     "bayesian_fx1_models": {
@@ -202,26 +203,26 @@
         },
         "Sunny": {
             "features": [
+                "om_syn_dd_cross_valley",
                 "mosmix_ff_kt",
-                "mosmix_cloud_pct",
                 "om_syn_dd_along_valley"
             ],
             "scaler_mean": [
-                7.251270830769231,
-                11.384615384615385,
-                -0.22949096855257362
+                -0.7199518254075449,
+                7.061361456716419,
+                -0.3822676107912956
             ],
             "scaler_scale": [
-                1.9611711767493183,
-                9.553802799356605,
-                0.5740812808909047
+                0.28328244960192006,
+                1.8930115677801906,
+                0.5052641849367461
             ],
             "coef": [
-                1.0090104593775315,
-                -0.3146266332481479,
-                0.5123251983061642
+                -0.6508241235571843,
+                0.8400139696096944,
+                0.2542931586690238
             ],
-            "intercept": -3.9915028861773316
+            "intercept": -3.4315793130004635
         }
     }
 }

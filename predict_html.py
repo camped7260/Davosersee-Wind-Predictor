@@ -512,7 +512,21 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
             if v is not None and "speed" in v and v["speed"] is not None
         ]
         if obs_h:
-            ax.scatter(obs_h, obs_sp, color="#e74c3c", label="Observation", zorder=5, s=30)
+            ax.scatter(obs_h, obs_sp, color="#2ecc71", label="Obs. Avg. Speed", zorder=5, s=30)
+
+        # DSSC Gust Points
+        gust_h = [
+            int(k.split(":")[0]) 
+            for k, v in dssc_obs.items() 
+            if v is not None and v.get("gust") is not None
+        ]
+        gust_sp = [
+            v["gust"] 
+            for k, v in dssc_obs.items() 
+            if v is not None and v.get("gust") is not None
+        ]
+        if gust_h:
+            ax.scatter(gust_h, gust_sp, color="#e67e22", marker="2", label="Obs. Gust", zorder=5, s=30)
 
     ax.axhline(CONFIG["settings"]["wind_threshold_knots"], color="#e74c3c", linestyle=":", alpha=0.7, label="Threshold (10kt)")
     
