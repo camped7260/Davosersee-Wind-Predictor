@@ -540,6 +540,7 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
     y_labels = [str(y) if y % 1 == 0 else "" for y in y_ticks]
     ax.set_yticks(y_ticks)
     ax.set_yticklabels(y_labels)
+    ax.tick_params(axis='y', right=True, labelright=True)
 
     dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
     date_with_weekday = dt_obj.strftime("%A, %Y-%m-%d")
