@@ -275,6 +275,16 @@ class StandaloneWindPredictor:
         bayesian_fx = self.w.get("bayesian_fx1_models", {})
         mean_offsets = self.w.get("category_mean_offsets", {})
         fx1_offsets = self.w.get("category_fx1_mean_offsets", {})
+        std_offsets = self.w.get("category_std_offsets", {})
+        fx1_std_offsets = self.w.get("category_fx1_std_offsets", {})
+
+        def bayesian_predictive_std(m, x_scaled):
+            """sqrt(1/alpha + x^T sigma x), matching sklearn's BayesianRidge.predict(return_std=True)."""
+            if "alpha" not in m or "sigma" not in m:
+                return None  # older model_weights.json without exported alpha_/sigma_
+            sigma_mat = np.array(m["sigma"])
+            var_pred = (1.0 / m["alpha"]) + float(x_scaled @ sigma_mat @ x_scaled)
+            return float(np.sqrt(max(var_pred, 0.0)))
 
         for idx, row in df.iterrows():
             raw_ff = row["mosmix_ff_kt"]
@@ -296,11 +306,18 @@ class StandaloneWindPredictor:
                 
                 x_scaled = (x_raw - s_mean) / s_scale
                 bias = float(np.dot(x_scaled, np.array(m["coef"])) + m["intercept"])
-                final_ff, s_ff, engine = raw_ff - bias, 1.2, "Bayesian Ridge"
+                s_ff = bayesian_predictive_std(m, x_scaled)
+                if s_ff is None:
+                    s_ff = 1.2  # fallback if weights file predates alpha_/sigma_ export
+                final_ff, engine = raw_ff - bias, "Bayesian Ridge"
             elif cat in mean_offsets:
-                final_ff, s_ff, engine = raw_ff - mean_offsets[cat], 0.0, "Cat Offset"
+                final_ff, s_ff, engine = raw_ff - mean_offsets[cat], std_offsets.get(cat, 0.0), "Cat Offset"
             else:
-                final_ff, s_ff, engine = raw_ff - self.w.get("global_fallback_bias", 0.45), 0.0, "Global Offset"
+                final_ff, s_ff, engine = (
+                    raw_ff - self.w.get("global_fallback_bias", 0.45),
+                    self.w.get("global_std_bias", 0.0),
+                    "Global Offset",
+                )
 
             # --- Gust Correction (fx1) ---
             rain_fx, factor_fx = self.apply_rain_multiplicative_factor(raw_fx, prec_prob, w_code)
@@ -315,11 +332,17 @@ class StandaloneWindPredictor:
 
                 x_scaled_fx = (x_raw_fx - s_mean_fx) / s_scale_fx
                 bias_fx = float(np.dot(x_scaled_fx, np.array(m_fx["coef"])) + m_fx["intercept"])
-                final_fx, s_fx = raw_fx - bias_fx, 1.5
+                s_fx = bayesian_predictive_std(m_fx, x_scaled_fx)
+                if s_fx is None:
+                    s_fx = 1.5  # fallback if weights file predates alpha_/sigma_ export
+                final_fx = raw_fx - bias_fx
             elif cat in fx1_offsets:
-                final_fx, s_fx = raw_fx - fx1_offsets[cat], 0.0
+                final_fx, s_fx = raw_fx - fx1_offsets[cat], fx1_std_offsets.get(cat, 0.0)
             else:
-                final_fx, s_fx = raw_fx - self.w.get("global_fx1_fallback_bias", 1.20), 0.0
+                final_fx, s_fx = (
+                    raw_fx - self.w.get("global_fx1_fallback_bias", 1.20),
+                    self.w.get("global_fx1_std_bias", 0.0),
+                )
 
             final_ff = float(np.clip(final_ff, 0.0, None))
             final_fx = float(np.clip(final_fx, final_ff, None))
@@ -499,6 +522,21 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
     ax.plot(hours, df_day["mosmix_ff_kt"], label="Wind Raw (MOSMIX-L)", color="#95a5a6", linestyle="--", linewidth=1.2)
     ax.plot(hours, corr_ff, label="Wind Corrected", color="#2ecc71", linewidth=2.2)
     ax.plot(hours, corr_fx, label="Gust Corrected", color="#e67e22", linewidth=2.2)
+
+    # ±1 std dev uncertainty bands
+    if "mosmix_ff_std_kt" in df_day.columns:
+        std_ff = df_day["mosmix_ff_std_kt"].fillna(0.0).values
+        ax.fill_between(
+            hours, np.maximum(0, corr_ff - std_ff), corr_ff + std_ff,
+            color="#2ecc71", alpha=0.15, zorder=1
+        )
+
+    if "mosmix_fx1_std_kt" in df_day.columns:
+        std_fx = df_day["mosmix_fx1_std_kt"].fillna(0.0).values
+        ax.fill_between(
+            hours, np.maximum(0, corr_fx - std_fx), corr_fx + std_fx,
+            color="#e67e22", alpha=0.15, zorder=1
+        )
 
     if dssc_obs:
         obs_h = [
