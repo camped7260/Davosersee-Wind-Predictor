@@ -1,88 +1,88 @@
 {
-    "version": "MOSMIX_V14",
-    "updated_at": "2026-08-12 13:11:49 CEST",
-    "global_fallback_bias": 0.2000099510090315,
-    "global_std_bias": 2.727479661881341,
-    "global_fx1_fallback_bias": -2.255112914589923,
-    "global_fx1_std_bias": 4.0546025998145225,
+    "version": "MOSMIX_V16",
+    "updated_at": "2026-08-15 08:35:19 CEST",
+    "global_fallback_bias": 0.36089190479252936,
+    "global_std_bias": 2.7466844908014423,
+    "global_fx1_fallback_bias": -2.22955837543542,
+    "global_fx1_std_bias": 4.055834069543108,
     "category_mean_offsets": {
-        "Cloudy": -0.6335654888408913,
-        "Cloudy + Precip(Other_Precip)": 0.3991942041756662,
-        "Cloudy + Precip(Rain)": 3.4781782014604548,
-        "Foehn + Cloudy": -0.704121012526997,
-        "Foehn + Cloudy + Precip(Other_Precip)": 5.436264297192225,
-        "Foehn + Cloudy + Precip(Rain)": -0.22950129589632784,
-        "Foehn + PartlyCloudy": -0.4224172472778722,
-        "Foehn + PartlyCloudy + Precip(Other_Precip)": -0.6000951078473717,
-        "Foehn + PartlyCloudy + Precip(Rain)": 4.477794537077034,
-        "Foehn + PartlyCloudy + Precip(Thunderstorm)": 7.876506786465082,
-        "Foehn + Sunny": -0.7769496468826489,
-        "PartlyCloudy": -0.3300630421166302,
-        "PartlyCloudy + Precip(Other_Precip)": 0.8059599219582434,
-        "Sudfoehn + PartlyCloudy": 2.342796851451884,
-        "Sudfoehn + PartlyCloudy + Precip(Thunderstorm)": 0.48522267185025303,
-        "Sudfoehn + Sunny": -0.5546198049288361,
-        "Sunny": -0.23686964520394582,
-        "Sunny + Precip(Other_Precip)": -2.4874171807055427
+        "Cloudy": -0.6335654888408904,
+        "Cloudy + Precip(Other_Precip)": 0.39919420417566465,
+        "Cloudy + Precip(Rain)": 3.478178201460453,
+        "Foehn + Cloudy": -0.7041210125270103,
+        "Foehn + Cloudy + Precip(Other_Precip)": 5.436264297192226,
+        "Foehn + Cloudy + Precip(Rain)": -0.22950129589632606,
+        "Foehn + PartlyCloudy": -0.42241724727787827,
+        "Foehn + PartlyCloudy + Precip(Other_Precip)": -0.6000951078473573,
+        "Foehn + PartlyCloudy + Precip(Rain)": 4.477794537077033,
+        "Foehn + PartlyCloudy + Precip(Thunderstorm)": 7.87650678646508,
+        "Foehn + Sunny": -0.7769496468826601,
+        "PartlyCloudy": -0.33006304211663084,
+        "PartlyCloudy + Precip(Other_Precip)": 0.8059599219582423,
+        "Sudfoehn + PartlyCloudy": 2.3427968514518818,
+        "Sudfoehn + PartlyCloudy + Precip(Thunderstorm)": 0.4852226718502495,
+        "Sudfoehn + Sunny": -0.5546198049288356,
+        "Sunny": 0.18968687426851663,
+        "Sunny + Precip(Other_Precip)": -2.48741718070554
     },
     "category_std_offsets": {
         "Cloudy": 0.0,
-        "Cloudy + Precip(Other_Precip)": 1.5496310918996066,
-        "Cloudy + Precip(Rain)": 4.602238929014175,
-        "Foehn + Cloudy": 2.0979044922173116,
-        "Foehn + Cloudy + Precip(Other_Precip)": 2.3926579349004844,
-        "Foehn + Cloudy + Precip(Rain)": 0.7455404109079038,
-        "Foehn + PartlyCloudy": 2.6121095047736245,
-        "Foehn + PartlyCloudy + Precip(Other_Precip)": 3.2462704477667264,
-        "Foehn + PartlyCloudy + Precip(Rain)": 2.924192638385636,
+        "Cloudy + Precip(Other_Precip)": 1.5496310918996055,
+        "Cloudy + Precip(Rain)": 4.602238929014177,
+        "Foehn + Cloudy": 2.097904492217323,
+        "Foehn + Cloudy + Precip(Other_Precip)": 2.3926579349004866,
+        "Foehn + Cloudy + Precip(Rain)": 0.7455404109079062,
+        "Foehn + PartlyCloudy": 2.6121095047736316,
+        "Foehn + PartlyCloudy + Precip(Other_Precip)": 3.2462704477667135,
+        "Foehn + PartlyCloudy + Precip(Rain)": 2.924192638385635,
         "Foehn + PartlyCloudy + Precip(Thunderstorm)": 0.0,
-        "Foehn + Sunny": 1.0631471808939201,
-        "PartlyCloudy": 2.332667254855885,
-        "PartlyCloudy + Precip(Other_Precip)": 2.3821814700871493,
-        "Sudfoehn + PartlyCloudy": 2.362119311260231,
+        "Foehn + Sunny": 1.0631471808939135,
+        "PartlyCloudy": 2.3326672548558856,
+        "PartlyCloudy + Precip(Other_Precip)": 2.3821814700871498,
+        "Sudfoehn + PartlyCloudy": 2.3621193112602317,
         "Sudfoehn + PartlyCloudy + Precip(Thunderstorm)": 0.0,
-        "Sudfoehn + Sunny": 1.6483714132724556,
-        "Sunny": 2.184115994130031,
+        "Sudfoehn + Sunny": 1.6483714132724552,
+        "Sunny": 2.39153906175891,
         "Sunny + Precip(Other_Precip)": 0.0
     },
     "category_fx1_mean_offsets": {
-        "Cloudy": -1.5745440933045352,
-        "Cloudy + Precip(Other_Precip)": -0.6857728812095019,
-        "Cloudy + Precip(Rain)": 4.664885883122494,
-        "Foehn + Cloudy": -3.046461689848811,
-        "Foehn + Cloudy + Precip(Other_Precip)": -0.4266017019438424,
-        "Foehn + Cloudy + Precip(Rain)": -1.9676361053995652,
-        "Foehn + PartlyCloudy": -2.5126599229611952,
-        "Foehn + PartlyCloudy + Precip(Other_Precip)": -3.2392361183585283,
-        "Foehn + PartlyCloudy + Precip(Rain)": 2.562597713174949,
-        "Foehn + PartlyCloudy + Precip(Thunderstorm)": -0.7408577071274269,
-        "Foehn + Sunny": -2.7952902137365,
-        "PartlyCloudy": -3.4511614984881205,
-        "PartlyCloudy + Precip(Other_Precip)": 1.1765335179265661,
-        "Sudfoehn + PartlyCloudy": 2.2146540032829383,
-        "Sudfoehn + PartlyCloudy + Precip(Thunderstorm)": -4.971956927861768,
-        "Sudfoehn + Sunny": -2.8478460110981874,
-        "Sunny": -3.221312389823566,
+        "Cloudy": -1.5745440933044996,
+        "Cloudy + Precip(Other_Precip)": -0.685772881209501,
+        "Cloudy + Precip(Rain)": 4.664885883122502,
+        "Foehn + Cloudy": -3.0464616898488,
+        "Foehn + Cloudy + Precip(Other_Precip)": -0.42660170194379976,
+        "Foehn + Cloudy + Precip(Rain)": -1.9676361053995501,
+        "Foehn + PartlyCloudy": -2.512659922961193,
+        "Foehn + PartlyCloudy + Precip(Other_Precip)": -3.2392361183585505,
+        "Foehn + PartlyCloudy + Precip(Rain)": 2.5625977131749504,
+        "Foehn + PartlyCloudy + Precip(Thunderstorm)": -0.7408577071274003,
+        "Foehn + Sunny": -2.795290213736489,
+        "PartlyCloudy": -3.4511614984881174,
+        "PartlyCloudy + Precip(Other_Precip)": 1.1765335179265672,
+        "Sudfoehn + PartlyCloudy": 2.2146540032829316,
+        "Sudfoehn + PartlyCloudy + Precip(Thunderstorm)": -4.9719569278618,
+        "Sudfoehn + Sunny": -2.8478460110981954,
+        "Sunny": -2.9836370003228345,
         "Sunny + Precip(Other_Precip)": -12.5313521762419
     },
     "category_fx1_std_offsets": {
         "Cloudy": 0.0,
-        "Cloudy + Precip(Other_Precip)": 1.797544636179265,
+        "Cloudy + Precip(Other_Precip)": 1.7975446361793166,
         "Cloudy + Precip(Rain)": 5.039702517333823,
-        "Foehn + Cloudy": 0.8751051847202156,
-        "Foehn + Cloudy + Precip(Other_Precip)": 5.88747067210886,
-        "Foehn + Cloudy + Precip(Rain)": 4.151005327123846,
-        "Foehn + PartlyCloudy": 3.0158560975670046,
-        "Foehn + PartlyCloudy + Precip(Other_Precip)": 3.8853709982353766,
-        "Foehn + PartlyCloudy + Precip(Rain)": 5.477721168191583,
+        "Foehn + Cloudy": 0.8751051847202558,
+        "Foehn + Cloudy + Precip(Other_Precip)": 5.887470672108865,
+        "Foehn + Cloudy + Precip(Rain)": 4.151005327123841,
+        "Foehn + PartlyCloudy": 3.0158560975670166,
+        "Foehn + PartlyCloudy + Precip(Other_Precip)": 3.885370998235368,
+        "Foehn + PartlyCloudy + Precip(Rain)": 5.477721168191584,
         "Foehn + PartlyCloudy + Precip(Thunderstorm)": 0.0,
-        "Foehn + Sunny": 1.9521154905888585,
-        "PartlyCloudy": 5.4202520657116615,
-        "PartlyCloudy + Precip(Other_Precip)": 4.3709929369223,
-        "Sudfoehn + PartlyCloudy": 4.35252404256578,
+        "Foehn + Sunny": 1.95211549058885,
+        "PartlyCloudy": 5.420252065711657,
+        "PartlyCloudy + Precip(Other_Precip)": 4.370992936922292,
+        "Sudfoehn + PartlyCloudy": 4.352524042565776,
         "Sudfoehn + PartlyCloudy + Precip(Thunderstorm)": 0.0,
-        "Sudfoehn + Sunny": 2.394536898485064,
-        "Sunny": 3.0887136734882072,
+        "Sudfoehn + Sunny": 2.394536898485063,
+        "Sunny": 3.3335493023402627,
         "Sunny + Precip(Other_Precip)": 0.0
     },
     "category_angles": {
@@ -93,30 +93,30 @@
         "Foehn + PartlyCloudy": {
             "features": [
                 "mosmix_u_kt",
-                "mosmix_dp_foehn"
+                "om_bl_height"
             ],
             "scaler_mean": [
-                -4.857864691613493,
-                4.634482758620697
+                -4.857864691613492,
+                1226.2068965517242
             ],
             "scaler_scale": [
-                0.7329588614315041,
-                0.8234811984407885
+                0.7329588614315034,
+                346.2674249876965
             ],
             "coef": [
-                -1.1474410721257189,
-                0.37487019819853673
+                -1.0246474229094866,
+                1.1178084122452303
             ],
-            "intercept": -1.0786115006029364,
-            "alpha": 0.24043389971621393,
+            "intercept": -0.8071070156535562,
+            "alpha": 0.3246965309974925,
             "sigma": [
                 [
-                    0.07744169328042802,
-                    0.045801019388558566
+                    0.04814430253188382,
+                    0.017905825581358205
                 ],
                 [
-                    0.045801019388558566,
-                    0.09570162888615878
+                    0.01790582558135821,
+                    0.05738494509095175
                 ]
             ]
         },
@@ -131,96 +131,96 @@
                 1.1861820724520942
             ],
             "coef": [
-                0.7408081980065572
+                0.7408081980065497
             ],
-            "intercept": -0.9040685541452564,
-            "alpha": 2.4855007822376933,
+            "intercept": -0.9040685541452675,
+            "alpha": 2.485500782237721,
             "sigma": [
                 [
-                    0.014635688106044212
+                    0.014635688106044042
                 ]
             ]
         },
         "PartlyCloudy": {
             "features": [
-                "mosmix_tt_c"
+                "om_bl_height"
             ],
             "scaler_mean": [
-                21.418750000000024
+                1591.5625
             ],
             "scaler_scale": [
-                2.4983041122929697
+                365.443731775153
             ],
             "coef": [
-                1.1914412103387164
+                1.2977209193412194
             ],
-            "intercept": -0.6003394135492945,
-            "alpha": 0.28931972048729226,
+            "intercept": -1.8835564664028122,
+            "alpha": 0.9069749203357036,
             "sigma": [
                 [
-                    0.11641219456728893
+                    0.1143841766512288
                 ]
             ]
         },
         "Sudfoehn + Sunny": {
             "features": [
-                "mosmix_rad_kj"
+                "om_soil_temp_0cm"
             ],
             "scaler_mean": [
-                2.8092307692307696
+                25.746153846153845
             ],
             "scaler_scale": [
-                0.23860045581430245
+                1.7895488836856601
             ],
             "coef": [
-                -0.30779152621064115
+                1.9946473960046778
             ],
-            "intercept": -0.8414850969903144,
-            "alpha": 0.42570862670086274,
+            "intercept": -2.208548156965625,
+            "alpha": 2.409402427044136,
             "sigma": [
                 [
-                    0.07863162671284916
+                    0.12393717552092227
                 ]
             ]
         },
         "Sunny": {
             "features": [
-                "mosmix_cloud_pct",
-                "mosmix_dd_cross_valley",
-                "om_syn_dd_cross_valley"
+                "om_bl_height_high",
+                "mosmix_v_kt",
+                "om_syn_dd_along_valley"
             ],
             "scaler_mean": [
-                13.467532467532468,
-                0.10363998994331605,
-                -0.7482915362260362
+                0.4842105263157895,
+                -5.886849239751313,
+                -0.20957144804916053
             ],
             "scaler_scale": [
-                9.335846869375395,
-                0.16846358057101227,
-                0.2746268967477614
+                0.499750630335546,
+                2.793579104113987,
+                0.554013524807311
             ],
             "coef": [
-                0.423537508747857,
-                0.21082449633359543,
-                -0.3029952891679052
+                0.5209385753873819,
+                -0.47788103160080875,
+                0.26117607935603177
             ],
-            "intercept": -0.7185283646720717,
-            "alpha": 0.23847745890235333,
+            "intercept": -0.989603711379628,
+            "alpha": 0.381848227890624,
             "sigma": [
                 [
-                    0.033022250700496164,
-                    -0.00553831774192439,
-                    -0.006339252529320402
+                    0.02391173517659002,
+                    -0.00573596833872313,
+                    -0.004974124939030993
                 ],
                 [
-                    -0.005538317741924392,
-                    0.03324319477474796,
-                    0.0005978078755219391
+                    -0.00573596833872313,
+                    0.028210998452024016,
+                    0.00398058591719161
                 ],
                 [
-                    -0.0063392525293204,
-                    0.0005978078755219389,
-                    0.02769620706536274
+                    -0.0049741249390309935,
+                    0.003980585917191609,
+                    0.024065900049734145
                 ]
             ]
         }
@@ -229,72 +229,72 @@
         "Foehn + PartlyCloudy": {
             "features": [
                 "mosmix_dp_foehn",
-                "mosmix_u_kt"
+                "mosmix_ff_kt"
             ],
             "scaler_mean": [
                 4.634482758620697,
-                -4.857864691613493
+                9.550957296551724
             ],
             "scaler_scale": [
-                0.8234811984407885,
-                0.7329588614315041
+                0.8234811984407876,
+                0.9656429227385401
             ],
             "coef": [
-                1.2884368641184898,
-                -0.04752441859560086
+                1.247133405456526,
+                0.16178986247234256
             ],
-            "intercept": -2.514378758876153,
-            "alpha": 0.1447931292188236,
+            "intercept": -2.514388233907178,
+            "alpha": 0.14508588451655818,
             "sigma": [
                 [
-                    0.09901916253735367,
-                    0.05059467305957695
+                    0.0839369106584697,
+                    -0.030755576582360247
                 ],
                 [
-                    0.05059467305957695,
-                    0.09900376191060173
+                    -0.030755576582360243,
+                    0.08392073496099532
                 ]
             ]
         },
         "Foehn + Sunny": {
             "features": [
-                "mosmix_ff_kt"
+                "om_syn_dd_cross_valley"
             ],
             "scaler_mean": [
-                10.298464319999999
+                -0.9032395185807275
             ],
             "scaler_scale": [
-                1.1861820724520942
+                0.08849049305235086
             ],
             "coef": [
-                1.7292414131245761
+                -1.7155346611233342
             ],
-            "intercept": -2.795290406401218,
-            "alpha": 2.3513172227057924,
+            "intercept": -2.7952901577177864,
+            "alpha": 2.1231280393088756,
             "sigma": [
                 [
-                    0.014109873499562045
+                    0.01561723563815626
                 ]
             ]
         },
         "PartlyCloudy": {
             "features": [
-                "mosmix_v_kt"
+                "mosmix_dd_cross_valley"
             ],
             "scaler_mean": [
-                -3.003316199620253
+                0.4360492522174302
             ],
             "scaler_scale": [
-                4.196462821266629
+                0.3336176914070371
             ],
             "coef": [
-                -2.634703903524055
+                -1.399375077818211
             ],
-            "intercept": -4.146759639065481,
-            "alpha": 0.054669946790149325,
+            "intercept": -4.334011720615014,
+            "alpha": 0.04369739479628272,
             "sigma": [
                 [
-                    0.3905767924230515
+                    0.4557630277641591
                 ]
             ]
         },
@@ -309,54 +309,54 @@
                 9.039688951029285
             ],
             "coef": [
-                1.2371678317589747
+                1.2371678317589587
             ],
-            "intercept": -3.0185497239628685,
-            "alpha": 0.3042397678871995,
+            "intercept": -3.018549723962877,
+            "alpha": 0.30423976788719675,
             "sigma": [
                 [
-                    0.08011856290227783
+                    0.08011856290227842
                 ]
             ]
         },
         "Sunny": {
             "features": [
-                "om_syn_dd_cross_valley",
                 "mosmix_ff_kt",
-                "om_syn_dd_along_valley"
+                "om_syn_dd_along_valley",
+                "om_syn_dd_cross_valley"
             ],
             "scaler_mean": [
-                -0.7482915362260362,
-                7.105618763636364,
-                -0.3734363692006692
+                7.232721717894739,
+                -0.20957144804916053,
+                -0.763629637005706
             ],
             "scaler_scale": [
-                0.2746268967477614,
-                1.8777585485874693,
-                0.4745367452088347
+                1.8272306341822255,
+                0.554013524807311,
+                0.25694084918457516
             ],
             "coef": [
-                -0.5161509815140362,
-                0.7546324245808983,
-                0.2383825431393896
+                0.7036095697419922,
+                0.21811083390922667,
+                -0.420675138687855
             ],
-            "intercept": -3.5002852192665452,
-            "alpha": 0.1330842458118447,
+            "intercept": -3.474858232757378,
+            "alpha": 0.15432521713112757,
             "sigma": [
                 [
-                    0.04049045930177786,
-                    0.005518641865492306,
-                    0.019872742850754563
+                    0.02412829265464083,
+                    0.0009648861332728191,
+                    0.004016197254392201
                 ],
                 [
-                    0.005518641865492305,
-                    0.0337402054542926,
-                    0.004139346851511122
+                    0.000964886133272819,
+                    0.02619342178348689,
+                    0.010229655163737946
                 ],
                 [
-                    0.01987274285075457,
-                    0.004139346851511124,
-                    0.04066712581223271
+                    0.004016197254392201,
+                    0.010229655163737948,
+                    0.026065764402118878
                 ]
             ]
         }

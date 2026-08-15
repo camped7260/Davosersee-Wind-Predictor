@@ -37,7 +37,8 @@ CONFIG = {
         "wind_threshold_knots": 10.0,
         "foil_confirmed_threshold_knots": 10.0,
         "operational_window_utc": [11, 17],
-        "init_valley_angle": 10.0
+        "init_valley_angle": 10.0,
+        "bl_height_threshold_m": 1600.0
     },
     "locations": {
         "davos": {"lat": 46.8041, "lon": 9.8372, "station_id": "06784"}
@@ -150,6 +151,11 @@ class StandaloneWindPredictor:
     def __init__(self, weights=EXPORTED_WEIGHTS):
         self.w = weights
         self.foil_threshold = CONFIG["settings"]["foil_confirmed_threshold_knots"]
+        # See wingfoil_predictor.py's CategorizedWindCorrectionPipeline for the
+        # rationale: om_bl_height's relationship with mosmix bias in the Sunny
+        # regime is a step, not a line, so it's exposed as an explicit binary
+        # feature (om_bl_height_high) rather than relying on the raw value.
+        self.bl_height_threshold_m = CONFIG["settings"].get("bl_height_threshold_m", 1600.0)
 
     @staticmethod
     def classify_precip_type(row):
@@ -248,6 +254,12 @@ class StandaloneWindPredictor:
             df.loc[idx, "mosmix_dd_cross_valley"] = np.sin(m_rad)
             df.loc[idx, "om_syn_dd_along_valley"] = np.cos(s_rad)
             df.loc[idx, "om_syn_dd_cross_valley"] = np.sin(s_rad)
+
+        if "om_bl_height" in df.columns:
+            df["om_bl_height_high"] = (df["om_bl_height"] >= self.bl_height_threshold_m).astype(float)
+            df.loc[df["om_bl_height"].isna(), "om_bl_height_high"] = np.nan
+        else:
+            df["om_bl_height_high"] = np.nan
 
         return df
 
@@ -417,7 +429,8 @@ def fetch_openmeteo(lat, lon, start_date, end_date):
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat, "longitude": lon,
-        "hourly": "wind_speed_700hPa,wind_direction_700hPa,weather_code,precipitation_probability",
+        "hourly": "wind_speed_700hPa,wind_direction_700hPa,weather_code,precipitation_probability,"
+                  "boundary_layer_height,wind_speed_800hPa,wind_direction_800hPa,soil_temperature_0cm",
         "wind_speed_unit": "ms", "timezone": "Europe/Zurich",
         "start_date": start_date, "end_date": end_date
     }
@@ -429,7 +442,11 @@ def fetch_openmeteo(lat, lon, start_date, end_date):
                 "om_syn_ff_kt": [convert_ms_to_knots(s) for s in h.get("wind_speed_700hPa", [])],
                 "om_syn_dd_deg": h.get("wind_direction_700hPa", []),
                 "om_prec_prob": h.get("precipitation_probability", []),
-                "om_w_codes": h.get("weather_code", [])
+                "om_w_codes": h.get("weather_code", []),
+                "om_bl_height": h.get("boundary_layer_height", []),
+                "om_syn_800hPa_kt": [convert_ms_to_knots(s) for s in h.get("wind_speed_800hPa", [])],
+                "om_syn_dir_800hPa_deg": h.get("wind_direction_800hPa", []),
+                "om_soil_temp_0cm": h.get("soil_temperature_0cm", []),
             }, index=pd.to_datetime(h.get("time")).tz_localize(None))
     except Exception as e:
         print(f"⚠️ Error fetching Open-Meteo: {e}")
@@ -665,6 +682,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
                     <th>Wind Dir</th>
                     <th>Temp (°C)</th>
                     <th>Cloud (%)</th>
+                    <th>BL (m)</th>
                     <th>Rain Prob (%)</th>
                     <th>Nordfoehn Grad (hPa)</th>
                     <th>Regime</th>
@@ -680,6 +698,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
                 wind_dir = degrees_to_cardinal(row.get('mosmix_dd_deg'))
                 temp = f"{row['mosmix_tt_c']:.1f}" if pd.notna(row.get('mosmix_tt_c')) else "-"
                 cloud = f"{row['mosmix_cloud_pct']:.0f}%" if pd.notna(row.get('mosmix_cloud_pct')) else "-"
+                bl_height = f"{row['om_bl_height']:.0f}" if pd.notna(row.get('om_bl_height')) else "-"
                 rain = f"{row['om_prec_prob']:.0f}%" if pd.notna(row.get('om_prec_prob')) else "-"
                 foehn_grad = f"{row['mosmix_dp_foehn']:.1f}" if pd.notna(row.get('mosmix_dp_foehn')) else "-"
                 
@@ -692,6 +711,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
                     <td>{wind_dir}</td>
                     <td>{temp}</td>
                     <td>{cloud}</td>
+                    <td>{bl_height}</td>
                     <td>{rain}</td>
                     <td>{foehn_grad}</td>
                     <td>{row.get('classification', '-')}</td>
