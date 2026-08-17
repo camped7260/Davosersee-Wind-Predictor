@@ -733,9 +733,11 @@ def generate_mobile_html(days_data, output_file="index.html"):
 """
 
     for date_str, data in days_data.items():
-        max_ff = data["df"]["mosmix_ff_corrected_kt"].max()
-        status_badge = '<span class="badge bg-go">🟢 WIN*FOIL</span>' if max_ff >= 10.0 else '<span class="badge bg-nogo">🔴 avg.Wind<10kt </span>'
-        
+        status_badge = '<span class="badge bg-nogo">🔴 avg.Wind<10kt </span>'
+        for ts, row in data["df"].iterrows():
+            if 10 <= ts.hour <= 19 and row["mosmix_ff_corrected_kt"] >= 10:
+                status_badge = '<span class="badge bg-go">🟢 WIN*FOIL</span>'
+         
         html_content += f"""
     <div class="day-card">
         <div class="day-title">
