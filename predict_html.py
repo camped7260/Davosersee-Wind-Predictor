@@ -54,21 +54,21 @@ DEFAULT_WEIGHTS = {
     "category_mean_offsets": {
         "Sunny": 0.52,
         "PartlyCloudy": 0.38,
-        "Foehn + Sunny": -1.15,
-        "Foehn + PartlyCloudy": -0.85,
+        "NordFoehn + Sunny": -1.15,
+        "NordFoehn + PartlyCloudy": -0.85,
         "Cloudy": 0.12
     },
     "category_fx1_mean_offsets": {
         "Sunny": 1.10,
         "PartlyCloudy": 0.95,
-        "Foehn + Sunny": -0.40,
-        "Foehn + PartlyCloudy": -0.20,
+        "NordFoehn + Sunny": -0.40,
+        "NordFoehn + PartlyCloudy": -0.20,
         "Cloudy": 0.50
     },
     "category_angles": {
         "DEFAULT": 10.0,
-        "Foehn + Sunny": 12.0,
-        "Foehn + PartlyCloudy": 12.0
+        "NordFoehn + Sunny": 12.0,
+        "NordFoehn + PartlyCloudy": 12.0
     },
     "bayesian_models": {},
     "bayesian_fx1_models": {}
@@ -105,9 +105,9 @@ REGIME_COLORS = {
     "Sunny": "#fff9db",
     "PartlyCloudy": "#f1f3f5",
     "Cloudy": "#e9ecef",
-    "Foehn": "#ffe3e3",
-    "Foehn + Sunny": "#ffe8cc",
-    "Foehn + PartlyCloudy": "#ffdeeb",
+    "NordFoehn": "#ffe3e3",
+    "NordFoehn + Sunny": "#ffe8cc",
+    "NordFoehn + PartlyCloudy": "#ffdeeb",
 }
 DEFAULT_REGIME_COLOR = "#ffffff"
 
@@ -132,6 +132,30 @@ def degrees_to_cardinal(deg):
             'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
     idx = int((deg + 11.25) / 22.5) % 16
     return f"{dirs[idx]} ({deg:.0f}°)"
+
+# WMO 4677 present-weather codes (as used by Open-Meteo / DWD MOSMIX), short
+# labels for compact display. Covers 0-99; codes outside this range (or
+# NaN) are handled by describe_weather_code() below.
+WMO_WEATHER_CODES = {
+    0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Fog", 48: "Rime fog",
+    51: "Light drizzle", 53: "Drizzle", 55: "Dense drizzle",
+    56: "Light frz drizzle", 57: "Dense frz drizzle",
+    61: "Light rain", 63: "Rain", 65: "Heavy rain",
+    66: "Light frz rain", 67: "Frz rain",
+    71: "Light snow", 73: "Snow", 75: "Heavy snow",
+    77: "Snow grains",
+    80: "Light showers", 81: "Showers", 82: "Violent showers",
+    85: "Light snow showers", 86: "Snow showers",
+    95: "Thunderstorm", 96: "T-storm + hail", 99: "T-storm + heavy hail",
+}
+
+def describe_weather_code(w_code):
+    """Returns a short text label for a WMO present-weather code, or 'N/A'
+    if the code is missing/unrecognized."""
+    if w_code is None or (isinstance(w_code, float) and pd.isna(w_code)):
+        return "N/A"
+    return WMO_WEATHER_CODES.get(int(w_code), f"Code {int(w_code)}")
 
 def clean_namespaces(root):
     for elem in root.iter():
@@ -212,7 +236,15 @@ class StandaloneWindPredictor:
         df["is_sunny"] = df["mosmix_cloud_pct"] < 33.0
         df["is_partly_cloudy"] = (df["mosmix_cloud_pct"] >= 33.0) & (df["mosmix_cloud_pct"] <= 66.0)
         df["is_cloudy"] = df["mosmix_cloud_pct"] > 66.0
-        df["is_precip"] = df["om_prec_prob"] > 50.0
+        # Precip regime tag keys off the forecast weather code (om_w_codes)
+        # rather than om_prec_prob, matching wingfoil_predictor.py. Probability
+        # alone fragments the training/live data: high-probability/no-rain-code
+        # hours (e.g. overcast, code 3, 88% prob) would get tagged into sparse
+        # composite regimes like "PartlyCloudy + Precip(Other_Precip)". Codes
+        # 50-99 cover drizzle/rain/snow/thunderstorm -- the same ranges
+        # classify_precip_type already uses, so is_precip and precip_type stay
+        # consistent with each other.
+        df["is_precip"] = df["om_w_codes"].between(50, 99)
 
         df["precip_type"] = df.apply(self.classify_precip_type, axis=1)
 
@@ -221,7 +253,7 @@ class StandaloneWindPredictor:
 
             # 1. Foehn status
             if row.get("is_nordfoehn", False):
-                tags.append("Foehn")
+                tags.append("NordFoehn")
             elif row.get("is_sudfoehn", False):
                 tags.append("Sudfoehn")
 
@@ -263,15 +295,48 @@ class StandaloneWindPredictor:
 
         return df
 
+    @staticmethod
+    def base_regime(cat):
+        """Strips the ' + Precip(...)' suffix from a composite classification
+        string, e.g. 'PartlyCloudy + Precip(Other_Precip)' -> 'PartlyCloudy'.
+        Returns cat unchanged if it has no Precip(...) suffix. Mirrors
+        wingfoil_predictor.py's CategorizedWindCorrectionPipeline.base_regime."""
+        if cat is None:
+            return cat
+        idx = cat.find(" + Precip(")
+        return cat[:idx] if idx != -1 else cat
+
+    def resolve_category(self, cat, lookup):
+        """Resolves `cat` to a key present in `lookup` (a dict keyed by
+        classification, e.g. bayesian_ff or mean_offsets from model_weights.json).
+
+        Composite regimes like 'PartlyCloudy + Precip(Other_Precip)' rarely
+        have enough training samples to get their own exported model/offset,
+        so most of them are absent from `lookup` and would otherwise fall
+        straight through to the flat global fallback -- discarding the base
+        regime's signal even though rain damping already handles precip's
+        actual physical effect on wind (see apply_rain_multiplicative_factor).
+
+        Falls back from the full composite string to its base regime before
+        giving up. Returns None if neither key is present, so callers can
+        still fall through to their next-lower fallback tier. Mirrors
+        wingfoil_predictor.py's resolve_category."""
+        if cat in lookup:
+            return cat
+        base = self.base_regime(cat)
+        if base != cat and base in lookup:
+            return base
+        return None
+
     def apply_rain_multiplicative_factor(self, raw_speed, prec_prob, w_code):
         if raw_speed < 1.2:
             return raw_speed, 1.0
         code_known = not pd.isna(w_code)
         is_rain = code_known and ((50 <= int(w_code) <= 69) or (80 <= int(w_code) <= 82))
-        
-        triggers = (prec_prob > 50.0 and is_rain) or (prec_prob > 75.0) if code_known else prec_prob > 50.0
-        floor = 0.33 if code_known else 0.66
-        
+
+        triggers = code_known and is_rain and prec_prob > 50.0
+        floor = 0.33
+
         if triggers:
             factor = max(floor, 1.0 - ((1.0 - floor) * (prec_prob / 100.0)))
             return raw_speed * factor, factor
@@ -281,6 +346,7 @@ class StandaloneWindPredictor:
         df = self._prepare_features(df_input)
         corr_ff, std_ff = [], []
         corr_fx, std_fx = [], []
+        total_deltas = []
         engines = []
 
         bayesian_ff = self.w.get("bayesian_models", {})
@@ -309,8 +375,9 @@ class StandaloneWindPredictor:
             rain_ff, factor = self.apply_rain_multiplicative_factor(raw_ff, prec_prob, w_code)
             if factor < 1.0:
                 final_ff, s_ff, engine = rain_ff, 0.0, f"Rain ({factor:.2f}x)"
-            elif cat in bayesian_ff:
-                m = bayesian_ff[cat]
+            elif self.resolve_category(cat, bayesian_ff) is not None:
+                ff_model_cat = self.resolve_category(cat, bayesian_ff)
+                m = bayesian_ff[ff_model_cat]
                 x_raw = np.array([row.get(f, 0.0) for f in m["features"]])
                 s_mean = np.array(m["scaler_mean"])
                 s_scale = np.array(m["scaler_scale"])
@@ -321,9 +388,12 @@ class StandaloneWindPredictor:
                 s_ff = bayesian_predictive_std(m, x_scaled)
                 if s_ff is None:
                     s_ff = 1.2  # fallback if weights file predates alpha_/sigma_ export
-                final_ff, engine = raw_ff - bias, "Bayesian Ridge"
-            elif cat in mean_offsets:
-                final_ff, s_ff, engine = raw_ff - mean_offsets[cat], std_offsets.get(cat, 0.0), "Cat Offset"
+                final_ff = raw_ff - bias
+                engine = "Bayesian Ridge" if ff_model_cat == cat else f"Bayesian Ridge (base regime: {ff_model_cat})"
+            elif self.resolve_category(cat, mean_offsets) is not None:
+                ff_offset_cat = self.resolve_category(cat, mean_offsets)
+                final_ff, s_ff = raw_ff - mean_offsets[ff_offset_cat], std_offsets.get(ff_offset_cat, 0.0)
+                engine = "Cat Offset" if ff_offset_cat == cat else f"Cat Offset (base regime: {ff_offset_cat})"
             else:
                 final_ff, s_ff, engine = (
                     raw_ff - self.w.get("global_fallback_bias", 0.45),
@@ -331,12 +401,9 @@ class StandaloneWindPredictor:
                     "Global Offset",
                 )
 
-            # --- Gust Correction (fx1) ---
-            rain_fx, factor_fx = self.apply_rain_multiplicative_factor(raw_fx, prec_prob, w_code)
-            if factor_fx < 1.0:
-                final_fx, s_fx = rain_fx, 0.0
-            elif cat in bayesian_fx:
-                m_fx = bayesian_fx[cat]
+            if self.resolve_category(cat, bayesian_fx) is not None:
+                fx1_model_cat = self.resolve_category(cat, bayesian_fx)
+                m_fx = bayesian_fx[fx1_model_cat]
                 x_raw_fx = np.array([row.get(f, 0.0) for f in m_fx["features"]])
                 s_mean_fx = np.array(m_fx["scaler_mean"])
                 s_scale_fx = np.array(m_fx["scaler_scale"])
@@ -348,27 +415,31 @@ class StandaloneWindPredictor:
                 if s_fx is None:
                     s_fx = 1.5  # fallback if weights file predates alpha_/sigma_ export
                 final_fx = raw_fx - bias_fx
-            elif cat in fx1_offsets:
-                final_fx, s_fx = raw_fx - fx1_offsets[cat], fx1_std_offsets.get(cat, 0.0)
+            elif self.resolve_category(cat, fx1_offsets) is not None:
+                fx1_offset_cat = self.resolve_category(cat, fx1_offsets)
+                final_fx, s_fx = raw_fx - fx1_offsets[fx1_offset_cat], fx1_std_offsets.get(fx1_offset_cat, 0.0)
             else:
                 final_fx, s_fx = (
                     raw_fx - self.w.get("global_fx1_fallback_bias", 1.20),
                     self.w.get("global_fx1_std_bias", 0.0),
                 )
 
-            final_ff = float(np.clip(final_ff, 0.0, None))
-            final_fx = float(np.clip(final_fx, final_ff, None))
+            final_ff_unclipped = final_ff
+            final_ff = float(np.clip(final_ff, a_min=0.0, a_max=None))
+            final_fx = float(np.clip(final_fx, a_min=final_ff, a_max=None))
 
             corr_ff.append(final_ff)
             std_ff.append(s_ff)
             corr_fx.append(final_fx)
             std_fx.append(s_fx)
+            total_deltas.append(final_ff_unclipped - raw_ff)
             engines.append(engine)
 
         df["mosmix_ff_corrected_kt"] = corr_ff
         df["mosmix_ff_std_kt"] = std_ff
         df["mosmix_fx1_corrected_kt"] = corr_fx
         df["mosmix_fx1_std_kt"] = std_fx
+        df["total_corr_kt"] = total_deltas
         df["correction_engine"] = engines
         return df
 
@@ -684,6 +755,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
                     <th>Cloud (%)</th>
                     <th>BL (m)</th>
                     <th>Rain Prob (%)</th>
+                    <th>Weather</th>
                     <th>Nordfoehn Grad (hPa)</th>
                     <th>Regime</th>
                 </tr>
@@ -700,6 +772,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
                 cloud = f"{row['mosmix_cloud_pct']:.0f}%" if pd.notna(row.get('mosmix_cloud_pct')) else "-"
                 bl_height = f"{row['om_bl_height']:.0f}" if pd.notna(row.get('om_bl_height')) else "-"
                 rain = f"{row['om_prec_prob']:.0f}%" if pd.notna(row.get('om_prec_prob')) else "-"
+                wcode_label = describe_weather_code(row.get('om_w_codes'))
                 foehn_grad = f"{row['mosmix_dp_foehn']:.1f}" if pd.notna(row.get('mosmix_dp_foehn')) else "-"
                 
                 html_content += f"""
@@ -713,6 +786,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
                     <td>{cloud}</td>
                     <td>{bl_height}</td>
                     <td>{rain}</td>
+                    <td>{wcode_label}</td>
                     <td>{foehn_grad}</td>
                     <td>{row.get('classification', '-')}</td>
                 </tr>"""
