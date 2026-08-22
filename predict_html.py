@@ -31,19 +31,65 @@ from foehn_gradient import get_combined_data_foehn_gradient
 # CONFIGURATION & WEIGHTS LOADING
 # =====================================================================
 
-CONFIG = {
+CONFIG_FILE = "config.json"
+
+# Fallback only -- mirrors wingfoil_predictor.py's DEFAULT_CONFIG (settings/
+# locations subset actually consumed here). If config.json is present its
+# values win; this dict never silently overrides it. Keeping the two
+# defaults in sync matters less than making sure config.json (the shared
+# on-disk source of truth used by both scripts) is actually read at all,
+# which previously wasn't the case here.
+DEFAULT_CONFIG = {
     "settings": {
         "timezone": "Europe/Zurich",
         "wind_threshold_knots": 10.0,
         "foil_confirmed_threshold_knots": 10.0,
         "operational_window_utc": [11, 17],
         "init_valley_angle": 10.0,
-        "bl_height_threshold_m": 1600.0
+        "bl_height_threshold_m": 1600.0,
+        # See wingfoil_predictor.py's DEFAULT_CONFIG comment: single source of
+        # truth for "is this rain-bearing hour confident enough to act on",
+        # shared by classify_precip_type and apply_rain_multiplicative_factor.
+        "rain_prob_confirm_threshold": 50.0
     },
     "locations": {
         "davos": {"lat": 46.8041, "lon": 9.8372, "station_id": "06784"}
     }
 }
+
+
+def load_config(verbose=False):
+    """Loads default configuration merged with user config from CONFIG_FILE.
+
+    Mirrors wingfoil_predictor.py's load_config: per-key merge within each
+    dict section, so a section present only in DEFAULT_CONFIG survives even
+    when config.json also defines that section. This is what makes
+    predict_html.py pick up config.json's foehn_stations, category_angles,
+    category_feature_sets, etc. -- previously this script used a hardcoded
+    CONFIG dict and never read config.json at all, so any tuning done there
+    (rain_prob_confirm_threshold, foehn_stations, valley angles...) silently
+    applied to training (wingfoil_predictor.py) but not to live prediction.
+    """
+    config = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
+
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                user_config = json.load(f)
+            for section, values in user_config.items():
+                if section in config and isinstance(config[section], dict) and isinstance(values, dict):
+                    config[section].update(values)
+                else:
+                    config[section] = values
+        except Exception as e:
+            print(f"⚠️ Warning: Erreur lors de la lecture de {CONFIG_FILE} : {e}")
+    elif verbose:
+        print(f"ℹ️ {CONFIG_FILE} not found. Using DEFAULT_CONFIG fallback.")
+
+    return config
+
+
+CONFIG = load_config()
 
 # Fallback weights in case weights.json is missing
 DEFAULT_WEIGHTS = {
@@ -157,6 +203,28 @@ def describe_weather_code(w_code):
         return "N/A"
     return WMO_WEATHER_CODES.get(int(w_code), f"Code {int(w_code)}")
 
+def solar_geometry(dt, lat, lon):
+    """NOAA-simplified solar noon / sunrise / day-length (UTC hours) for a
+    given date at (lat, lon). Mirrors wingfoil_predictor.py's
+    CategorizedWindCorrectionPipeline.solar_geometry -- used to build the
+    season-robust daylight_frac_elapsed feature some categories
+    (config.json's category_feature_sets / category_fx1_feature_sets) are
+    trained on. Kept byte-for-byte in sync with the training-side
+    implementation since a divergent formula here would silently feed a
+    subtly different feature value into an otherwise-correct model."""
+    n = dt.timetuple().tm_yday
+    B = math.radians(360 / 365 * (n - 81))
+    eot = 9.87 * math.sin(2 * B) - 7.53 * math.cos(B) - 1.5 * math.sin(B)  # minutes
+    solar_noon = 12 - lon / 15 - eot / 60
+    decl = math.radians(23.44) * math.sin(math.radians(360 / 365 * (n - 81)))
+    lat_r = math.radians(lat)
+    cos_ha = max(-1.0, min(1.0, -math.tan(lat_r) * math.tan(decl)))
+    ha = math.degrees(math.acos(cos_ha))
+    day_len = 2 * ha / 15
+    sunrise = solar_noon - day_len / 2
+    return solar_noon, sunrise, day_len
+
+
 def clean_namespaces(root):
     for elem in root.iter():
         if '}' in elem.tag:
@@ -181,18 +249,62 @@ class StandaloneWindPredictor:
         # feature (om_bl_height_high) rather than relying on the raw value.
         self.bl_height_threshold_m = CONFIG["settings"].get("bl_height_threshold_m", 1600.0)
 
+        # Shared confidence threshold for rain-bearing WMO codes -- see
+        # classify_precip_type / is_rain_damping_code / apply_rain_multiplicative_factor.
+        # Sourced from config.json (via CONFIG) so it can't drift from the
+        # value wingfoil_predictor.py trained the offsets/models with.
+        self.rain_prob_confirm_threshold = CONFIG["settings"].get(
+            "rain_prob_confirm_threshold", 50.0
+        )
+
+        # Station coordinates for solar-relative diurnal features (see
+        # solar_geometry / _add_diurnal_features), mirroring
+        # wingfoil_predictor.py's CategorizedWindCorrectionPipeline.
+        davos_loc = CONFIG.get("locations", {}).get("davos", {})
+        self.station_lat = davos_loc.get("lat", 46.8041)
+        self.station_lon = davos_loc.get("lon", 9.8372)
+
     @staticmethod
-    def classify_precip_type(row):
+    def is_rain_damping_code(w_code):
+        """WMO present-weather codes treated as rain-bearing for the purpose
+        of apply_rain_multiplicative_factor. Mirrors wingfoil_predictor.py's
+        CategorizedWindCorrectionPipeline.is_rain_damping_code -- single
+        source of truth for the "is this a rain code" check, shared by
+        classify_precip_type and apply_rain_multiplicative_factor so the two
+        can't drift apart."""
+        if pd.isna(w_code):
+            return False
+        w = int(w_code)
+        return (50 <= w <= 69) or (80 <= w <= 82)
+
+    def classify_precip_type(self, row):
+        """Labels the precipitation regime for a row. Mirrors
+        wingfoil_predictor.py's CategorizedWindCorrectionPipeline.classify_precip_type.
+
+        "Rain" is only returned when the WMO code is rain-bearing AND
+        om_prec_prob clears self.w's rain_prob_confirm_threshold -- the exact
+        same two conditions apply_rain_multiplicative_factor requires to
+        actually damp the forecast. Rows that carry a rain code but don't
+        clear the probability bar are tagged "Rain_LowConf" instead of being
+        folded into "Rain" (where they'd never get damped) or "No_Precip"
+        (which would drop the rain signal entirely) -- this keeps
+        classification consistent with the physical correction that's
+        actually applied at prediction time.
+        """
         if not row.get("is_precip", False):
             return "No_Precip"
-        
+
         w_code = row.get("om_w_codes")
         if pd.isna(w_code):
             return "Precip_Unknown"
-            
+
         w_code = int(w_code)
-        if (50 <= w_code <= 69) or (80 <= w_code <= 82):
-            return "Rain"
+        prec_prob = row.get("om_prec_prob", np.nan)
+
+        if self.is_rain_damping_code(w_code):
+            if pd.notna(prec_prob) and prec_prob > self.rain_prob_confirm_threshold:
+                return "Rain"
+            return "Rain_LowConf"
         elif (70 <= w_code <= 79) or (85 <= w_code <= 86):
             return "Snow"
         elif 90 <= w_code <= 99:
@@ -208,9 +320,14 @@ class StandaloneWindPredictor:
             try:
                 unique_dates = df.index.strftime("%Y-%m-%d").unique()
                 foehn_records = []
-                
+                # Use the same station pair as wingfoil_predictor.py's main()
+                # (config.json's "foehn_stations", falling back to
+                # foehn_gradient.py's DEFAULT_STATIONS) so training and live
+                # prediction never source dp_foehn from different stations.
+                foehn_stations = CONFIG.get("foehn_stations")
+
                 for target_date in unique_dates:
-                    records = get_combined_data_foehn_gradient(target_date)
+                    records = get_combined_data_foehn_gradient(target_date, stations=foehn_stations)
                     if records:
                         foehn_records.extend(records)
 
@@ -293,6 +410,31 @@ class StandaloneWindPredictor:
         else:
             df["om_bl_height_high"] = np.nan
 
+        # daylight_frac_elapsed: season-robust diurnal-phase feature, mirrors
+        # wingfoil_predictor.py's _add_diurnal_features. Several categories
+        # in config.json's category_feature_sets / category_fx1_feature_sets
+        # (e.g. "NordFoehn + PartlyCloudy", "Sunny" fx1) are trained on this
+        # feature -- previously this script never computed it, so any model
+        # using it silently received 0.0 for every row at prediction time
+        # (via row.get(f, 0.0) in predict()) instead of the real value.
+        df["hour_int"] = df.index.hour
+        lat, lon = self.station_lat, self.station_lon
+
+        def _daylight_frac(row_hour, row_date):
+            if pd.isna(row_hour) or pd.isna(row_date):
+                return np.nan
+            ts = pd.Timestamp(row_date)
+            if pd.isna(ts):
+                return np.nan
+            _, sunrise, day_len = solar_geometry(ts.to_pydatetime(), lat, lon)
+            if day_len <= 0:
+                return np.nan
+            return (row_hour - sunrise) / day_len
+
+        df["daylight_frac_elapsed"] = [
+            _daylight_frac(h, d) for h, d in zip(df["hour_int"], df.index.normalize())
+        ]
+
         return df
 
     @staticmethod
@@ -329,12 +471,18 @@ class StandaloneWindPredictor:
         return None
 
     def apply_rain_multiplicative_factor(self, raw_speed, prec_prob, w_code):
+        """Mirrors wingfoil_predictor.py's
+        CategorizedWindCorrectionPipeline.apply_rain_multiplicative_factor.
+        Uses the same is_rain_damping_code check and rain_prob_confirm_threshold
+        (from config.json) as classify_precip_type, so a row tagged "Rain"
+        here always gets damped, and "Rain_LowConf" rows never silently do."""
         if raw_speed < 1.2:
             return raw_speed, 1.0
-        code_known = not pd.isna(w_code)
-        is_rain = code_known and ((50 <= int(w_code) <= 69) or (80 <= int(w_code) <= 82))
 
-        triggers = code_known and is_rain and prec_prob > 50.0
+        is_rain_code = self.is_rain_damping_code(w_code)
+        prec_prob_known = pd.notna(prec_prob)
+
+        triggers = is_rain_code and prec_prob_known and prec_prob > self.rain_prob_confirm_threshold
         floor = 0.33
 
         if triggers:
