@@ -135,12 +135,12 @@ class CategorizedWindCorrectionPipeline:
         davos_loc = config.get("locations", {}).get("davos", {})
         self.station_lat = davos_loc.get("lat", 46.8041)
         self.station_lon = davos_loc.get("lon", 9.8372)
-        self.category_feature_sets = config.get(
+        self.category_feature_sets = dict(config.get(
             "category_feature_sets", DEFAULT_CONFIG["category_feature_sets"]
-        )
-        self.category_fx1_feature_sets = config.get(
+        ))
+        self.category_fx1_feature_sets = dict(config.get(
             "category_fx1_feature_sets", DEFAULT_CONFIG["category_fx1_feature_sets"]
-        )
+        ))
 
         self.global_fallback_bias = weights.get("global_fallback_bias", 0.0)
         self.global_std_bias = weights.get("global_std_bias", 0.0)
@@ -150,6 +150,27 @@ class CategorizedWindCorrectionPipeline:
         self.category_std_offsets = dict(weights.get("category_std_offsets", {}))
         self.category_fx1_mean_offsets = dict(weights.get("category_fx1_mean_offsets", {}))
         self.category_fx1_std_offsets = dict(weights.get("category_fx1_std_offsets", {}))
+
+        # The scaler/ridge rebuilt below for each category were fit on the
+        # exact column names/order stored in the exported weights' own
+        # "features" key -- that, not config.json, is the ground truth for
+        # what a *fitted* model expects. config.json's category_feature_sets
+        # is allowed to drift from model_weights.json between deploys (e.g.
+        # a stale feature name left over from an earlier feature-engineering
+        # version, or a re-export that changed the selected features for a
+        # category); when it does, process() would otherwise build the
+        # prediction-time DataFrame using config.json's (wrong) column
+        # names, and sklearn's fitted-feature-name check on the frozen
+        # scaler raises ValueError. Overriding per-category here from the
+        # weights themselves keeps process() structurally unable to ask a
+        # rebuilt model for columns it wasn't fit on. config.json's entries
+        # remain the fallback for any category with no fitted model.
+        for cat, m in weights.get("bayesian_models", {}).items():
+            if m.get("features"):
+                self.category_feature_sets[cat] = list(m["features"])
+        for cat, m in weights.get("bayesian_fx1_models", {}).items():
+            if m.get("features"):
+                self.category_fx1_feature_sets[cat] = list(m["features"])
 
         self.bayesian_models = self._rebuild_pipelines(weights.get("bayesian_models", {}))
         self.bayesian_fx1_models = self._rebuild_pipelines(weights.get("bayesian_fx1_models", {}))
