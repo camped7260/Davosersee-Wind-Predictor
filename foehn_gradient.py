@@ -7,6 +7,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 import pandas as pd
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates 
 
@@ -17,6 +18,8 @@ DEFAULT_STATIONS = {
     "Zurich": "06660",
     "Lugano": "06770"
 }
+
+DEFAULT_TIMEZONE = "Europe/Zurich"
 
 
 def load_foehn_stations():
@@ -34,8 +37,27 @@ def load_foehn_stations():
     return DEFAULT_STATIONS
 
 
-# Configuration des stations MOSMIX (DWD)
+def load_timezone():
+    """Charge le fuseau horaire local depuis config.json (clé 'settings.timezone'),
+    avec repli sur DEFAULT_TIMEZONE. target_date (passé par les appelants) est
+    toujours une date Europe/Zurich -- today_str doit être calculé dans le même
+    fuseau, sinon un serveur hébergé en UTC peut décaler la comparaison
+    'target_date <= today_str' d'un jour près de minuit."""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                user_config = json.load(f)
+            tz_name = user_config.get("settings", {}).get("timezone")
+            if tz_name:
+                return tz_name
+        except Exception as e:
+            print(f"[⚠️ Warning] Erreur lors de la lecture de {CONFIG_FILE} : {e}")
+    return DEFAULT_TIMEZONE
+
+
+# Configuration des stations MOSMIX (DWD) et du fuseau horaire local
 STATIONS = load_foehn_stations()
+LOCAL_TIMEZONE = load_timezone()
 
 def clean_namespaces(root):
     """ Supprime récursivement tous les espaces de noms pour faciliter la recherche de balises """
@@ -55,7 +77,7 @@ def fetch_station_data(station_id, station_name, target_date):
     - Si target_date < aujourd'hui : utilise le fichier de 09h00.
     - Si target_date == aujourd'hui : utilise le fichier 'latest' (03h ou 09h).
     """
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = datetime.now(ZoneInfo(LOCAL_TIMEZONE)).strftime("%Y-%m-%d")
     date_part = target_date.replace("-", "")
     
     if target_date <= today_str:
@@ -209,6 +231,6 @@ def plot_foehn_gradient(records):
 # --- Exécution principale ---
 if __name__ == "__main__":
     print("=== DEBUT DE L'EXTRACTION MOSMIX ===")
-    donnees = get_combined_data_foehn_gradient(datetime.now().strftime('%Y-%m-%d'))
+    donnees = get_combined_data_foehn_gradient(datetime.now(ZoneInfo(LOCAL_TIMEZONE)).strftime('%Y-%m-%d'))
     if donnees:
         plot_foehn_gradient(donnees)

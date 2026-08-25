@@ -3,15 +3,23 @@
 predict_html.py
 
 Standalone prediction & HTML dashboard generator for Wingfoil forecasting (Davos).
-Runs predictions for today and tomorrow by loading 
+Runs predictions for today and tomorrow by loading
 weights, features, scalers, and offsets dynamically from `model_weights.json`.
+
+Live prediction now runs through the exact same
+CategorizedWindCorrectionPipeline (feature engineering, classification,
+rain damping, Bayesian Ridge correction) that wingfoil_predictor.py trains
+-- reconstructed from model_weights.json via
+CategorizedWindCorrectionPipeline.from_exported_weights instead of the
+hand-written StandaloneWindPredictor this script used to carry. See that
+classmethod's docstring for why this matters: it's what makes live
+prediction and training/analysis structurally unable to diverge in how a
+forecast is classified or corrected.
 """
 
 import argparse
 import io
 import json
-import math
-import os
 import sys
 import zipfile
 import xml.etree.ElementTree as ET
@@ -24,70 +32,34 @@ import pandas as pd
 import requests
 import matplotlib.pyplot as plt
 
-# Import foehn pressure gradient calculation function identically to main script
 from foehn_gradient import get_combined_data_foehn_gradient
+from CategorizedWindCorrectionPipeline import CategorizedWindCorrectionPipeline
+
+# Config loading, unit conversions, WMO code descriptions, and display
+# constants (REGIME_COLORS etc.) come from wf_common.py -- the same shared
+# foundation wingfoil_predictor.py uses. This script previously kept its
+# own DEFAULT_CONFIG (with unused keys like init_valley_angle /
+# bl_height_threshold_m, artifacts of StandaloneWindPredictor's now-removed
+# hand-reimplementation) and never actually read config.json for most
+# settings; using load_config() directly means config.json is genuinely
+# the single on-disk source of truth for both scripts.
+from wf_common import (
+    CONFIG_FILE,
+    DEFAULT_CONFIG,
+    REGIME_COLORS,
+    DEFAULT_REGIME_COLOR,
+    describe_weather_code,
+    load_config,
+    convert_ms_to_knots,
+    convert_kmh_to_knots,
+    kelvin_to_celsius,
+    degrees_to_cardinal,
+    clean_namespaces,
+)
 
 # =====================================================================
 # CONFIGURATION & WEIGHTS LOADING
 # =====================================================================
-
-CONFIG_FILE = "config.json"
-
-# Fallback only -- mirrors wingfoil_predictor.py's DEFAULT_CONFIG (settings/
-# locations subset actually consumed here). If config.json is present its
-# values win; this dict never silently overrides it. Keeping the two
-# defaults in sync matters less than making sure config.json (the shared
-# on-disk source of truth used by both scripts) is actually read at all,
-# which previously wasn't the case here.
-DEFAULT_CONFIG = {
-    "settings": {
-        "timezone": "Europe/Zurich",
-        "wind_threshold_knots": 10.0,
-        "foil_confirmed_threshold_knots": 10.0,
-        "operational_window_utc": [11, 17],
-        "init_valley_angle": 10.0,
-        "bl_height_threshold_m": 1600.0,
-        # See wingfoil_predictor.py's DEFAULT_CONFIG comment: single source of
-        # truth for "is this rain-bearing hour confident enough to act on",
-        # shared by classify_precip_type and apply_rain_multiplicative_factor.
-        "rain_prob_confirm_threshold": 50.0
-    },
-    "locations": {
-        "davos": {"lat": 46.8041, "lon": 9.8372, "station_id": "06784"}
-    }
-}
-
-
-def load_config(verbose=False):
-    """Loads default configuration merged with user config from CONFIG_FILE.
-
-    Mirrors wingfoil_predictor.py's load_config: per-key merge within each
-    dict section, so a section present only in DEFAULT_CONFIG survives even
-    when config.json also defines that section. This is what makes
-    predict_html.py pick up config.json's foehn_stations, category_angles,
-    category_feature_sets, etc. -- previously this script used a hardcoded
-    CONFIG dict and never read config.json at all, so any tuning done there
-    (rain_prob_confirm_threshold, foehn_stations, valley angles...) silently
-    applied to training (wingfoil_predictor.py) but not to live prediction.
-    """
-    config = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
-
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                user_config = json.load(f)
-            for section, values in user_config.items():
-                if section in config and isinstance(config[section], dict) and isinstance(values, dict):
-                    config[section].update(values)
-                else:
-                    config[section] = values
-        except Exception as e:
-            print(f"⚠️ Warning: Erreur lors de la lecture de {CONFIG_FILE} : {e}")
-    elif verbose:
-        print(f"ℹ️ {CONFIG_FILE} not found. Using DEFAULT_CONFIG fallback.")
-
-    return config
-
 
 CONFIG = load_config()
 
@@ -110,11 +82,6 @@ DEFAULT_WEIGHTS = {
         "NordFoehn + Sunny": -0.40,
         "NordFoehn + PartlyCloudy": -0.20,
         "Cloudy": 0.50
-    },
-    "category_angles": {
-        "DEFAULT": 10.0,
-        "NordFoehn + Sunny": 12.0,
-        "NordFoehn + PartlyCloudy": 12.0
     },
     "bayesian_models": {},
     "bayesian_fx1_models": {}
@@ -140,456 +107,12 @@ def get_formatted_version_and_build():
     """Returns the weights export timestamp and local HTML build timestamp."""
     weights_updated = EXPORTED_WEIGHTS.get("updated_at", "Unknown")
     version_str = EXPORTED_WEIGHTS.get("version", "v2.5-json")
-    
+
     tz_name = CONFIG["settings"]["timezone"]
     local_now = datetime.now(ZoneInfo(tz_name))
     build_time_str = local_now.strftime("%Y-%m-%d %H:%M:%S %Z")
-    
+
     return version_str, weights_updated, build_time_str
-
-REGIME_COLORS = {
-    "Sunny": "#fff9db",
-    "PartlyCloudy": "#f1f3f5",
-    "Cloudy": "#e9ecef",
-    "NordFoehn": "#ffe3e3",
-    "NordFoehn + Sunny": "#ffe8cc",
-    "NordFoehn + PartlyCloudy": "#ffdeeb",
-}
-DEFAULT_REGIME_COLOR = "#ffffff"
-
-# =====================================================================
-# HELPER CONVERSIONS & UTILITIES
-# =====================================================================
-
-def convert_ms_to_knots(ms):
-    return ms * 1.94384 if ms is not None else None
-
-def convert_kmh_to_knots(kmh):
-    return kmh / 1.852 if kmh is not None else None
-
-def kelvin_to_celsius(k):
-    return k - 273.15 if k is not None else None
-
-def degrees_to_cardinal(deg):
-    """Converts wind direction degrees to a 16-point compass direction string."""
-    if deg is None or pd.isna(deg):
-        return "-"
-    dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 
-            'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
-    idx = int((deg + 11.25) / 22.5) % 16
-    return f"{dirs[idx]} ({deg:.0f}°)"
-
-# WMO 4677 present-weather codes (as used by Open-Meteo / DWD MOSMIX), short
-# labels for compact display. Covers 0-99; codes outside this range (or
-# NaN) are handled by describe_weather_code() below.
-WMO_WEATHER_CODES = {
-    0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
-    45: "Fog", 48: "Rime fog",
-    51: "Light drizzle", 53: "Drizzle", 55: "Dense drizzle",
-    56: "Light frz drizzle", 57: "Dense frz drizzle",
-    61: "Light rain", 63: "Rain", 65: "Heavy rain",
-    66: "Light frz rain", 67: "Frz rain",
-    71: "Light snow", 73: "Snow", 75: "Heavy snow",
-    77: "Snow grains",
-    80: "Light showers", 81: "Showers", 82: "Violent showers",
-    85: "Light snow showers", 86: "Snow showers",
-    95: "Thunderstorm", 96: "T-storm + hail", 99: "T-storm + heavy hail",
-}
-
-def describe_weather_code(w_code):
-    """Returns a short text label for a WMO present-weather code, or 'N/A'
-    if the code is missing/unrecognized."""
-    if w_code is None or (isinstance(w_code, float) and pd.isna(w_code)):
-        return "N/A"
-    return WMO_WEATHER_CODES.get(int(w_code), f"Code {int(w_code)}")
-
-def solar_geometry(dt, lat, lon):
-    """NOAA-simplified solar noon / sunrise / day-length (UTC hours) for a
-    given date at (lat, lon). Mirrors wingfoil_predictor.py's
-    CategorizedWindCorrectionPipeline.solar_geometry -- used to build the
-    season-robust daylight_frac_elapsed feature some categories
-    (config.json's category_feature_sets / category_fx1_feature_sets) are
-    trained on. Kept byte-for-byte in sync with the training-side
-    implementation since a divergent formula here would silently feed a
-    subtly different feature value into an otherwise-correct model."""
-    n = dt.timetuple().tm_yday
-    B = math.radians(360 / 365 * (n - 81))
-    eot = 9.87 * math.sin(2 * B) - 7.53 * math.cos(B) - 1.5 * math.sin(B)  # minutes
-    solar_noon = 12 - lon / 15 - eot / 60
-    decl = math.radians(23.44) * math.sin(math.radians(360 / 365 * (n - 81)))
-    lat_r = math.radians(lat)
-    cos_ha = max(-1.0, min(1.0, -math.tan(lat_r) * math.tan(decl)))
-    ha = math.degrees(math.acos(cos_ha))
-    day_len = 2 * ha / 15
-    sunrise = solar_noon - day_len / 2
-    return solar_noon, sunrise, day_len
-
-
-def clean_namespaces(root):
-    for elem in root.iter():
-        if '}' in elem.tag:
-            elem.tag = elem.tag.split('}', 1)[1]
-        for key in list(elem.attrib.keys()):
-            if '}' in key:
-                new_key = key.split('}', 1)[1]
-                elem.attrib[new_key] = elem.attrib.pop(key)
-    return root
-
-# =====================================================================
-# STANDALONE PREDICTION ENGINE
-# =====================================================================
-
-class StandaloneWindPredictor:
-    def __init__(self, weights=EXPORTED_WEIGHTS):
-        self.w = weights
-        self.foil_threshold = CONFIG["settings"]["foil_confirmed_threshold_knots"]
-        # See wingfoil_predictor.py's CategorizedWindCorrectionPipeline for the
-        # rationale: om_bl_height's relationship with mosmix bias in the Sunny
-        # regime is a step, not a line, so it's exposed as an explicit binary
-        # feature (om_bl_height_high) rather than relying on the raw value.
-        self.bl_height_threshold_m = CONFIG["settings"].get("bl_height_threshold_m", 1600.0)
-
-        # Shared confidence threshold for rain-bearing WMO codes -- see
-        # classify_precip_type / is_rain_damping_code / apply_rain_multiplicative_factor.
-        # Sourced from config.json (via CONFIG) so it can't drift from the
-        # value wingfoil_predictor.py trained the offsets/models with.
-        self.rain_prob_confirm_threshold = CONFIG["settings"].get(
-            "rain_prob_confirm_threshold", 50.0
-        )
-
-        # Station coordinates for solar-relative diurnal features (see
-        # solar_geometry / _add_diurnal_features), mirroring
-        # wingfoil_predictor.py's CategorizedWindCorrectionPipeline.
-        davos_loc = CONFIG.get("locations", {}).get("davos", {})
-        self.station_lat = davos_loc.get("lat", 46.8041)
-        self.station_lon = davos_loc.get("lon", 9.8372)
-
-    @staticmethod
-    def is_rain_damping_code(w_code):
-        """WMO present-weather codes treated as rain-bearing for the purpose
-        of apply_rain_multiplicative_factor. Mirrors wingfoil_predictor.py's
-        CategorizedWindCorrectionPipeline.is_rain_damping_code -- single
-        source of truth for the "is this a rain code" check, shared by
-        classify_precip_type and apply_rain_multiplicative_factor so the two
-        can't drift apart."""
-        if pd.isna(w_code):
-            return False
-        w = int(w_code)
-        return (50 <= w <= 69) or (80 <= w <= 82)
-
-    def classify_precip_type(self, row):
-        """Labels the precipitation regime for a row. Mirrors
-        wingfoil_predictor.py's CategorizedWindCorrectionPipeline.classify_precip_type.
-
-        "Rain" is only returned when the WMO code is rain-bearing AND
-        om_prec_prob clears self.w's rain_prob_confirm_threshold -- the exact
-        same two conditions apply_rain_multiplicative_factor requires to
-        actually damp the forecast. Rows that carry a rain code but don't
-        clear the probability bar are tagged "Rain_LowConf" instead of being
-        folded into "Rain" (where they'd never get damped) or "No_Precip"
-        (which would drop the rain signal entirely) -- this keeps
-        classification consistent with the physical correction that's
-        actually applied at prediction time.
-        """
-        if not row.get("is_precip", False):
-            return "No_Precip"
-
-        w_code = row.get("om_w_codes")
-        if pd.isna(w_code):
-            return "Precip_Unknown"
-
-        w_code = int(w_code)
-        prec_prob = row.get("om_prec_prob", np.nan)
-
-        if self.is_rain_damping_code(w_code):
-            if pd.notna(prec_prob) and prec_prob > self.rain_prob_confirm_threshold:
-                return "Rain"
-            return "Rain_LowConf"
-        elif (70 <= w_code <= 79) or (85 <= w_code <= 86):
-            return "Snow"
-        elif 90 <= w_code <= 99:
-            return "Thunderstorm"
-        else:
-            return "Other_Precip"
-
-    def _prepare_features(self, df):
-        df = df.copy()
-        
-        # Calculate foehn pressure gradient using target date string(s)
-        if "mosmix_dp_foehn" not in df.columns or df["mosmix_dp_foehn"].isna().all():
-            try:
-                unique_dates = df.index.strftime("%Y-%m-%d").unique()
-                foehn_records = []
-                # Use the same station pair as wingfoil_predictor.py's main()
-                # (config.json's "foehn_stations", falling back to
-                # foehn_gradient.py's DEFAULT_STATIONS) so training and live
-                # prediction never source dp_foehn from different stations.
-                foehn_stations = CONFIG.get("foehn_stations")
-
-                for target_date in unique_dates:
-                    records = get_combined_data_foehn_gradient(target_date, stations=foehn_stations)
-                    if records:
-                        foehn_records.extend(records)
-
-                if foehn_records:
-                    df_foehn = (
-                        pd.DataFrame(foehn_records)
-                        .drop_duplicates(subset=["datetime"], keep="first")
-                        .set_index("datetime")
-                    )
-                    df["mosmix_dp_foehn"] = df.index.map(df_foehn["dp_foehn"])
-
-                if df["mosmix_dp_foehn"].isna().any():
-                    df["mosmix_dp_foehn"] = df["mosmix_dp_foehn"].fillna(
-                        df["mosmix_u_kt"].apply(lambda u: u * 0.4 if pd.notna(u) else 0.0)
-                    )
-
-            except Exception as e:
-                print(f"⚠️ Warning: Could not calculate foehn gradient ({e}). Falling back to proxy.")
-                df["mosmix_dp_foehn"] = df["mosmix_u_kt"].apply(lambda u: u * 0.4 if pd.notna(u) else 0.0)
-
-        df["is_nordfoehn"] = df["mosmix_dp_foehn"] > 3.5
-        df["is_sudfoehn"] = df["mosmix_dp_foehn"] < -3.5
-        df["is_sunny"] = df["mosmix_cloud_pct"] < 33.0
-        df["is_partly_cloudy"] = (df["mosmix_cloud_pct"] >= 33.0) & (df["mosmix_cloud_pct"] <= 66.0)
-        df["is_cloudy"] = df["mosmix_cloud_pct"] > 66.0
-        # Precip regime tag keys off the forecast weather code (om_w_codes)
-        # rather than om_prec_prob, matching wingfoil_predictor.py. Probability
-        # alone fragments the training/live data: high-probability/no-rain-code
-        # hours (e.g. overcast, code 3, 88% prob) would get tagged into sparse
-        # composite regimes like "PartlyCloudy + Precip(Other_Precip)". Codes
-        # 50-99 cover drizzle/rain/snow/thunderstorm -- the same ranges
-        # classify_precip_type already uses, so is_precip and precip_type stay
-        # consistent with each other.
-        df["is_precip"] = df["om_w_codes"].between(50, 99)
-
-        df["precip_type"] = df.apply(self.classify_precip_type, axis=1)
-
-        def classify(row):
-            tags = []
-
-            # 1. Foehn status
-            if row.get("is_nordfoehn", False):
-                tags.append("NordFoehn")
-            elif row.get("is_sudfoehn", False):
-                tags.append("Sudfoehn")
-
-            # 2. Cloud Cover status
-            if row.get("is_sunny", False):
-                tags.append("Sunny")
-            elif row.get("is_partly_cloudy", False):
-                tags.append("PartlyCloudy")
-            elif row.get("is_cloudy", False):
-                tags.append("Cloudy")
-
-            # 3. Precipitation status
-            if row.get("is_precip", False):
-                tags.append(f"Precip({row.get('precip_type', 'No_Precip')})")
-
-            return " + ".join(tags) if tags else "Unclassified"
-
-        df["classification"] = df.apply(classify, axis=1)
-
-        angles_map = self.w.get("category_angles", {})
-        default_angle = angles_map.get("DEFAULT", CONFIG["settings"]["init_valley_angle"])
-
-        for idx, row in df.iterrows():
-            cat = row["classification"]
-            angle = angles_map.get(cat, default_angle)
-            m_rad = np.radians(row.get("mosmix_dd_deg", 0.0) - angle)
-            s_rad = np.radians(row.get("om_syn_dd_deg", 0.0) - angle)
-            
-            df.loc[idx, "mosmix_dd_along_valley"] = np.cos(m_rad)
-            df.loc[idx, "mosmix_dd_cross_valley"] = np.sin(m_rad)
-            df.loc[idx, "om_syn_dd_along_valley"] = np.cos(s_rad)
-            df.loc[idx, "om_syn_dd_cross_valley"] = np.sin(s_rad)
-
-        if "om_bl_height" in df.columns:
-            df["om_bl_height_high"] = (df["om_bl_height"] >= self.bl_height_threshold_m).astype(float)
-            df.loc[df["om_bl_height"].isna(), "om_bl_height_high"] = np.nan
-        else:
-            df["om_bl_height_high"] = np.nan
-
-        # daylight_frac_elapsed: season-robust diurnal-phase feature, mirrors
-        # wingfoil_predictor.py's _add_diurnal_features. Several categories
-        # in config.json's category_feature_sets / category_fx1_feature_sets
-        # (e.g. "NordFoehn + PartlyCloudy", "Sunny" fx1) are trained on this
-        # feature -- previously this script never computed it, so any model
-        # using it silently received 0.0 for every row at prediction time
-        # (via row.get(f, 0.0) in predict()) instead of the real value.
-        df["hour_int"] = df.index.hour
-        lat, lon = self.station_lat, self.station_lon
-
-        def _daylight_frac(row_hour, row_date):
-            if pd.isna(row_hour) or pd.isna(row_date):
-                return np.nan
-            ts = pd.Timestamp(row_date)
-            if pd.isna(ts):
-                return np.nan
-            _, sunrise, day_len = solar_geometry(ts.to_pydatetime(), lat, lon)
-            if day_len <= 0:
-                return np.nan
-            return (row_hour - sunrise) / day_len
-
-        df["daylight_frac_elapsed"] = [
-            _daylight_frac(h, d) for h, d in zip(df["hour_int"], df.index.normalize())
-        ]
-
-        return df
-
-    @staticmethod
-    def base_regime(cat):
-        """Strips the ' + Precip(...)' suffix from a composite classification
-        string, e.g. 'PartlyCloudy + Precip(Other_Precip)' -> 'PartlyCloudy'.
-        Returns cat unchanged if it has no Precip(...) suffix. Mirrors
-        wingfoil_predictor.py's CategorizedWindCorrectionPipeline.base_regime."""
-        if cat is None:
-            return cat
-        idx = cat.find(" + Precip(")
-        return cat[:idx] if idx != -1 else cat
-
-    def resolve_category(self, cat, lookup):
-        """Resolves `cat` to a key present in `lookup` (a dict keyed by
-        classification, e.g. bayesian_ff or mean_offsets from model_weights.json).
-
-        Composite regimes like 'PartlyCloudy + Precip(Other_Precip)' rarely
-        have enough training samples to get their own exported model/offset,
-        so most of them are absent from `lookup` and would otherwise fall
-        straight through to the flat global fallback -- discarding the base
-        regime's signal even though rain damping already handles precip's
-        actual physical effect on wind (see apply_rain_multiplicative_factor).
-
-        Falls back from the full composite string to its base regime before
-        giving up. Returns None if neither key is present, so callers can
-        still fall through to their next-lower fallback tier. Mirrors
-        wingfoil_predictor.py's resolve_category."""
-        if cat in lookup:
-            return cat
-        base = self.base_regime(cat)
-        if base != cat and base in lookup:
-            return base
-        return None
-
-    def apply_rain_multiplicative_factor(self, raw_speed, prec_prob, w_code):
-        """Mirrors wingfoil_predictor.py's
-        CategorizedWindCorrectionPipeline.apply_rain_multiplicative_factor.
-        Uses the same is_rain_damping_code check and rain_prob_confirm_threshold
-        (from config.json) as classify_precip_type, so a row tagged "Rain"
-        here always gets damped, and "Rain_LowConf" rows never silently do."""
-        if raw_speed < 1.2:
-            return raw_speed, 1.0
-
-        is_rain_code = self.is_rain_damping_code(w_code)
-        prec_prob_known = pd.notna(prec_prob)
-
-        triggers = is_rain_code and prec_prob_known and prec_prob > self.rain_prob_confirm_threshold
-        floor = 0.33
-
-        if triggers:
-            factor = max(floor, 1.0 - ((1.0 - floor) * (prec_prob / 100.0)))
-            return raw_speed * factor, factor
-        return raw_speed, 1.0
-
-    def predict(self, df_input):
-        df = self._prepare_features(df_input)
-        corr_ff, std_ff = [], []
-        corr_fx, std_fx = [], []
-        total_deltas = []
-        engines = []
-
-        bayesian_ff = self.w.get("bayesian_models", {})
-        bayesian_fx = self.w.get("bayesian_fx1_models", {})
-        mean_offsets = self.w.get("category_mean_offsets", {})
-        fx1_offsets = self.w.get("category_fx1_mean_offsets", {})
-        std_offsets = self.w.get("category_std_offsets", {})
-        fx1_std_offsets = self.w.get("category_fx1_std_offsets", {})
-
-        def bayesian_predictive_std(m, x_scaled):
-            """sqrt(1/alpha + x^T sigma x), matching sklearn's BayesianRidge.predict(return_std=True)."""
-            if "alpha" not in m or "sigma" not in m:
-                return None  # older model_weights.json without exported alpha_/sigma_
-            sigma_mat = np.array(m["sigma"])
-            var_pred = (1.0 / m["alpha"]) + float(x_scaled @ sigma_mat @ x_scaled)
-            return float(np.sqrt(max(var_pred, 0.0)))
-
-        for idx, row in df.iterrows():
-            raw_ff = row["mosmix_ff_kt"]
-            raw_fx = row.get("mosmix_fx1_kt", raw_ff)
-            cat = row["classification"]
-            prec_prob = row.get("om_prec_prob", 0.0)
-            w_code = row.get("om_w_codes", np.nan)
-
-            # --- Mean Wind Speed Correction (ff) ---
-            rain_ff, factor = self.apply_rain_multiplicative_factor(raw_ff, prec_prob, w_code)
-            if factor < 1.0:
-                final_ff, s_ff, engine = rain_ff, 0.0, f"Rain ({factor:.2f}x)"
-            elif self.resolve_category(cat, bayesian_ff) is not None:
-                ff_model_cat = self.resolve_category(cat, bayesian_ff)
-                m = bayesian_ff[ff_model_cat]
-                x_raw = np.array([row.get(f, 0.0) for f in m["features"]])
-                s_mean = np.array(m["scaler_mean"])
-                s_scale = np.array(m["scaler_scale"])
-                s_scale[s_scale == 0] = 1.0
-                
-                x_scaled = (x_raw - s_mean) / s_scale
-                bias = float(np.dot(x_scaled, np.array(m["coef"])) + m["intercept"])
-                s_ff = bayesian_predictive_std(m, x_scaled)
-                if s_ff is None:
-                    s_ff = 1.2  # fallback if weights file predates alpha_/sigma_ export
-                final_ff = raw_ff - bias
-                engine = "Bayesian Ridge" if ff_model_cat == cat else f"Bayesian Ridge (base regime: {ff_model_cat})"
-            elif self.resolve_category(cat, mean_offsets) is not None:
-                ff_offset_cat = self.resolve_category(cat, mean_offsets)
-                final_ff, s_ff = raw_ff - mean_offsets[ff_offset_cat], std_offsets.get(ff_offset_cat, 0.0)
-                engine = "Cat Offset" if ff_offset_cat == cat else f"Cat Offset (base regime: {ff_offset_cat})"
-            else:
-                final_ff, s_ff, engine = (
-                    raw_ff - self.w.get("global_fallback_bias", 0.45),
-                    self.w.get("global_std_bias", 0.0),
-                    "Global Offset",
-                )
-
-            if self.resolve_category(cat, bayesian_fx) is not None:
-                fx1_model_cat = self.resolve_category(cat, bayesian_fx)
-                m_fx = bayesian_fx[fx1_model_cat]
-                x_raw_fx = np.array([row.get(f, 0.0) for f in m_fx["features"]])
-                s_mean_fx = np.array(m_fx["scaler_mean"])
-                s_scale_fx = np.array(m_fx["scaler_scale"])
-                s_scale_fx[s_scale_fx == 0] = 1.0
-
-                x_scaled_fx = (x_raw_fx - s_mean_fx) / s_scale_fx
-                bias_fx = float(np.dot(x_scaled_fx, np.array(m_fx["coef"])) + m_fx["intercept"])
-                s_fx = bayesian_predictive_std(m_fx, x_scaled_fx)
-                if s_fx is None:
-                    s_fx = 1.5  # fallback if weights file predates alpha_/sigma_ export
-                final_fx = raw_fx - bias_fx
-            elif self.resolve_category(cat, fx1_offsets) is not None:
-                fx1_offset_cat = self.resolve_category(cat, fx1_offsets)
-                final_fx, s_fx = raw_fx - fx1_offsets[fx1_offset_cat], fx1_std_offsets.get(fx1_offset_cat, 0.0)
-            else:
-                final_fx, s_fx = (
-                    raw_fx - self.w.get("global_fx1_fallback_bias", 1.20),
-                    self.w.get("global_fx1_std_bias", 0.0),
-                )
-
-            final_ff_unclipped = final_ff
-            final_ff = float(np.clip(final_ff, a_min=0.0, a_max=None))
-            final_fx = float(np.clip(final_fx, a_min=final_ff, a_max=None))
-
-            corr_ff.append(final_ff)
-            std_ff.append(s_ff)
-            corr_fx.append(final_fx)
-            std_fx.append(s_fx)
-            total_deltas.append(final_ff_unclipped - raw_ff)
-            engines.append(engine)
-
-        df["mosmix_ff_corrected_kt"] = corr_ff
-        df["mosmix_ff_std_kt"] = std_ff
-        df["mosmix_fx1_corrected_kt"] = corr_fx
-        df["mosmix_fx1_std_kt"] = std_fx
-        df["total_corr_kt"] = total_deltas
-        df["correction_engine"] = engines
-        return df
 
 # =====================================================================
 # DATA RETRIEVAL (DWD MOSMIX & OPEN-METEO & DSSC)
@@ -645,26 +168,47 @@ def fetch_mosmix(station_id):
         return None
 
 def fetch_openmeteo(lat, lon, start_date, end_date):
+    """Fetches Open-Meteo hourly forecast fields used by
+    category_feature_sets / category_fx1_feature_sets.
+
+    Column names and units are now identical to wingfoil_predictor.py's
+    fetch_openmeteo (wind_speed_unit=kn, so no manual m/s->kt conversion;
+    om_wind_speed_700hPa_kt / om_wind_direction_700hPa naming, plus the
+    10m wind fields). Previously this function used different parameters
+    (wind_speed_unit=ms + manual conversion) and different column names
+    (om_syn_ff_kt, om_syn_dd_deg, om_syn_800hPa_kt) than the training
+    script -- config.json's category_feature_sets reference
+    om_wind_speed_700hPa_kt / om_wind_direction_700hPa, so those features
+    were silently absent (defaulted to 0.0 in the correction pipeline) for
+    every live prediction made by this script, even though the
+    corresponding model was fit on the real values.
+    """
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
-        "latitude": lat, "longitude": lon,
+        "latitude": lat,
+        "longitude": lon,
         "hourly": "wind_speed_700hPa,wind_direction_700hPa,weather_code,precipitation_probability,"
-                  "boundary_layer_height,wind_speed_800hPa,wind_direction_800hPa,soil_temperature_0cm",
-        "wind_speed_unit": "ms", "timezone": "Europe/Zurich",
-        "start_date": start_date, "end_date": end_date
+                  "boundary_layer_height,wind_speed_800hPa,wind_direction_800hPa,soil_temperature_0cm,"
+                  "wind_speed_10m,wind_direction_10m",
+        "wind_speed_unit": "kn",
+        "timezone": "Europe/Zurich",
+        "start_date": start_date,
+        "end_date": end_date,
     }
     try:
         res = requests.get(url, params=params, timeout=10)
         if res.status_code == 200:
             h = res.json().get("hourly", {})
             return pd.DataFrame({
-                "om_syn_ff_kt": [convert_ms_to_knots(s) for s in h.get("wind_speed_700hPa", [])],
-                "om_syn_dd_deg": h.get("wind_direction_700hPa", []),
+                "om_wind_speed_700hPa_kt": h.get("wind_speed_700hPa", []),
+                "om_wind_direction_700hPa": h.get("wind_direction_700hPa", []),
+                "om_wind_speed_800hPa_kt": h.get("wind_speed_800hPa", []),
+                "om_wind_direction_800hPa": h.get("wind_direction_800hPa", []),
+                "om_wind_speed_10m_kt": h.get("wind_speed_10m", []),
+                "om_wind_direction_10m": h.get("wind_direction_10m", []),
                 "om_prec_prob": h.get("precipitation_probability", []),
                 "om_w_codes": h.get("weather_code", []),
                 "om_bl_height": h.get("boundary_layer_height", []),
-                "om_syn_800hPa_kt": [convert_ms_to_knots(s) for s in h.get("wind_speed_800hPa", [])],
-                "om_syn_dir_800hPa_deg": h.get("wind_direction_800hPa", []),
                 "om_soil_temp_0cm": h.get("soil_temperature_0cm", []),
             }, index=pd.to_datetime(h.get("time")).tz_localize(None))
     except Exception as e:
@@ -756,6 +300,7 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
     corr_fx = df_day["mosmix_fx1_corrected_kt"]
 
     ax.plot(hours, df_day["mosmix_ff_kt"], label="Wind Raw (MOSMIX-L)", color="#95a5a6", linestyle="--", linewidth=1.2)
+    ax.plot(hours, df_day["mosmix_fx1_kt"], label="Gust Raw (MOSMIX-L)", color="#f0b27a", linestyle="--", linewidth=1.2)
     ax.plot(hours, corr_ff, label="Wind Corrected", color="#2ecc71", linewidth=2.2)
     ax.plot(hours, corr_fx, label="Gust Corrected", color="#e67e22", linewidth=2.2)
 
@@ -875,7 +420,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
         <h1>-- experimental, at your own risk, no guarantees! --</h1>
         <div class="version">
             Build Time: {build_time_str}<br>
-            Model Weights Version: {weights_updated}
+            Model Weights Version: {version_str} (exported {weights_updated})
         </div>
     </div>
 """
@@ -979,7 +524,8 @@ def main():
     lat = CONFIG["locations"]["davos"]["lat"]
     lon = CONFIG["locations"]["davos"]["lon"]
 
-    today = datetime.now()
+    tz_name = CONFIG["settings"]["timezone"]
+    today = datetime.now(ZoneInfo(tz_name))
     dates = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(3)]
     img_names = ["today.png", "tomorrow.png", "dayaftertomorrow.png"]
 
@@ -992,8 +538,50 @@ def main():
 
     df_combined = df_mosmix.join(df_om, how="inner")
 
-    predictor = StandaloneWindPredictor(EXPORTED_WEIGHTS)
-    df_predicted = predictor.predict(df_combined)
+    # Foehn pressure gradient (mosmix_dp_foehn): fetched here, once, using
+    # the same config.json "foehn_stations" (or foehn_gradient.py's
+    # DEFAULT_STATIONS fallback) as wingfoil_predictor.py's main(), rather
+    # than inside the predictor class. CategorizedWindCorrectionPipeline's
+    # _prepare_features expects mosmix_dp_foehn to already be a column on
+    # the input df -- it's the caller's responsibility to supply it,
+    # exactly as wingfoil_predictor.py does -- so both scripts source this
+    # feature identically instead of predict_html.py silently falling back
+    # to a proxy (mosmix_u_kt * 0.4) whenever the fetch failed.
+    print("📥 Récupération du gradient de Foehn...")
+    foehn_stations = CONFIG.get("foehn_stations")
+    unique_dates = sorted(df_combined.index.strftime("%Y-%m-%d").unique())
+    foehn_records = []
+    for target_date in unique_dates:
+        records = get_combined_data_foehn_gradient(target_date, stations=foehn_stations)
+        if records:
+            foehn_records.extend(records)
+
+    if foehn_records:
+        df_foehn = (
+            pd.DataFrame(foehn_records)
+            .drop_duplicates(subset=["datetime"], keep="first")
+            .set_index("datetime")
+        )
+        df_combined["mosmix_dp_foehn"] = df_combined.index.map(df_foehn["dp_foehn"])
+    else:
+        df_combined["mosmix_dp_foehn"] = np.nan
+
+    if df_combined["mosmix_dp_foehn"].isna().any():
+        missing = int(df_combined["mosmix_dp_foehn"].isna().sum())
+        print(f"⚠️ Warning: mosmix_dp_foehn missing for {missing} row(s); falling back to proxy (mosmix_u_kt * 0.4) for those rows.")
+        df_combined["mosmix_dp_foehn"] = df_combined["mosmix_dp_foehn"].fillna(
+            df_combined["mosmix_u_kt"].apply(lambda u: u * 0.4 if pd.notna(u) else 0.0)
+        )
+
+    # Reconstruct the exact fit-time pipeline (feature engineering,
+    # classification, rain damping, resolve_category fallbacks, and the
+    # Bayesian Ridge correction itself) from the exported weights, instead
+    # of predict_html.py's former hand-written StandaloneWindPredictor.
+    # This is what guarantees live prediction and training/analysis
+    # (wingfoil_predictor.py) apply identical logic -- see
+    # CategorizedWindCorrectionPipeline.from_exported_weights.
+    pipeline = CategorizedWindCorrectionPipeline.from_exported_weights(EXPORTED_WEIGHTS)
+    df_predicted = pipeline.process(df_combined)
 
     days_data = {}
     for i, d_str in enumerate(dates):
