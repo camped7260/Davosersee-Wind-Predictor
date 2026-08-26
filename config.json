@@ -1,61 +1,58 @@
 {
     "category_feature_sets": {
         "Sunny": [
-            "om_bl_height",
-            "mosmix_v_kt",
-            "mosmix_cloud_pct"
+            "om_bl_height_higher_than_1400",
+            "om_wind_speed_700hPa_kt",
+            "om_bl_height_higher_than_1600"
         ],
         "NordFoehn + PartlyCloudy": [
-            "daylight_frac_elapsed",
-            "om_bl_height",
-            "mosmix_dp_foehn"
-        ],
-        "PartlyCloudy": [
-            "om_soil_temp_0cm",
+            "mosmix_rad_kj",
             "om_bl_height"
         ],
+        "PartlyCloudy": [
+            "mosmix_dp_foehn",
+            "mosmix_v_kt"
+        ],
         "NordFoehn + Cloudy + Precip(Rain)": [
-            "mosmix_u_kt"
+            "mosmix_ff_kt"
         ],
         "Sudfoehn + Sunny": [
-            "om_soil_temp_0cm"
+            "mosmix_ff_kt"
         ],
         "Cloudy + Precip(Rain)": [
-            "mosmix_dp_foehn"
+            "mosmix_ff_kt"
         ],
         "Cloudy": [
-            "om_soil_temp_0cm"
+            "mosmix_ff_kt"
         ],
         "NordFoehn + Sunny": [
-            "om_soil_temp_0cm"
+            "mosmix_ff_kt"
         ]
     },
     "category_fx1_feature_sets": {
         "Sunny": [
-            "daylight_frac_elapsed",
-            "om_wind_speed_700hPa_kt",
-            "om_bl_height"
+            "om_soil_temp_0cm",
+            "mosmix_v_kt"
         ],
         "NordFoehn + PartlyCloudy": [
-            "om_bl_height",
             "daylight_frac_elapsed",
-            "mosmix_dp_foehn"
+            "om_bl_height"
         ],
         "PartlyCloudy": [
-            "mosmix_dp_foehn",
-            "mosmix_tt_c"
-        ],
-        "NordFoehn + Cloudy + Precip(Rain)": [
-            "mosmix_u_kt"
-        ],
-        "Sudfoehn + Sunny": [
+            "om_bl_height",
             "mosmix_cloud_pct"
         ],
+        "NordFoehn + Cloudy + Precip(Rain)": [
+            "mosmix_ff_kt"
+        ],
+        "Sudfoehn + Sunny": [
+            "mosmix_ff_kt"
+        ],
         "Cloudy + Precip(Rain)": [
-            "daylight_frac_elapsed"
+            "mosmix_ff_kt"
         ],
         "Cloudy": [
-            "mosmix_u_kt"
+            "mosmix_ff_kt"
         ],
         "NordFoehn + Sunny": [
             "mosmix_ff_kt"
