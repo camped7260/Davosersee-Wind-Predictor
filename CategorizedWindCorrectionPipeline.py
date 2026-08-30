@@ -47,6 +47,15 @@ class CategorizedWindCorrectionPipeline:
         self.foil_threshold = config["settings"].get("foil_confirmed_threshold_knots", 10.0)
         self.weight_center = self.foil_threshold - 0.5  
 
+        # Foehn pressure-gradient magnitude thresholds (mosmix_dp_foehn,
+        # ZH - LU convention: positive => Nordfoehn, negative => Sudfoehn).
+        # Deliberately two independent settings, not a shared magnitude --
+        # see DEFAULT_CONFIG's comment in wf_common.py and
+        # foehn_threshold_diagnostic.py's dedicated Sudfoehn confidence
+        # analysis for why the two sides don't share an optimal cutoff.
+        self.nordfoehn_threshold_hpa = config["settings"].get("nordfoehn_threshold_hpa", 3.5)
+        self.sudfoehn_threshold_hpa = config["settings"].get("sudfoehn_threshold_hpa", 1.5)
+
         # Shared confidence threshold for rain-bearing WMO codes -- see
         # DEFAULT_CONFIG comment and is_rain_damping_code / classify_precip_type.
         # Read once here so classification and damping consult the exact same
@@ -132,6 +141,14 @@ class CategorizedWindCorrectionPipeline:
         self.rain_prob_confirm_threshold = config["settings"].get(
             "rain_prob_confirm_threshold", 50.0
         )
+        # Foehn pressure-gradient magnitude thresholds -- see the matching
+        # comment in __init__ / wf_common.py's DEFAULT_CONFIG. Must be set
+        # here too since from_exported_weights bypasses __init__ entirely
+        # (cls.__new__(cls)); without it, live prediction's _prepare_features
+        # call would hit an AttributeError the moment it tried to tag
+        # is_nordfoehn / is_sudfoehn.
+        self.nordfoehn_threshold_hpa = config["settings"].get("nordfoehn_threshold_hpa", 3.5)
+        self.sudfoehn_threshold_hpa = config["settings"].get("sudfoehn_threshold_hpa", 1.5)
         davos_loc = config.get("locations", {}).get("davos", {})
         self.station_lat = davos_loc.get("lat", 46.8041)
         self.station_lon = davos_loc.get("lon", 9.8372)
@@ -380,8 +397,20 @@ class CategorizedWindCorrectionPipeline:
         # kept as its own tag rather than merged with "Foehn" so it doesn't
         # dilute the Foehn categories' learned bias correction with a
         # physically different regime).
-        df["is_nordfoehn"] = df["mosmix_dp_foehn"] > 3.5
-        df["is_sudfoehn"] = df["mosmix_dp_foehn"] < -3.5
+        #
+        # Nordfoehn and Sudfoehn use SEPARATE magnitude thresholds, not a
+        # shared |dp_foehn| cutoff -- see self.nordfoehn_threshold_hpa /
+        # self.sudfoehn_threshold_hpa (config-driven, see wf_common.py's
+        # DEFAULT_CONFIG comment) and foehn_threshold_diagnostic.py's
+        # dedicated Sudfoehn confidence analysis. That analysis's current
+        # verdict on the Sudfoehn side is SUGGESTIVE, not CONFIDENT: the
+        # 1.5 hPa cutoff clears the statistical bar (Welch's t-test +
+        # bootstrap CI both exclude zero) but fails the physical
+        # cross-check (obs_dir_deg does not clearly cluster there,
+        # clustering r ~0.2 vs Nordfoehn's ~0.8) -- rerun that script as
+        # calibration_db.csv grows before trusting this value further.
+        df["is_nordfoehn"] = df["mosmix_dp_foehn"] > self.nordfoehn_threshold_hpa
+        df["is_sudfoehn"] = df["mosmix_dp_foehn"] < -self.sudfoehn_threshold_hpa
         df["is_sunny"] = df["mosmix_cloud_pct"] < 33.0
         df["is_partly_cloudy"] = (df["mosmix_cloud_pct"] >= 33.0) & (
             df["mosmix_cloud_pct"] <= 66.0
@@ -906,7 +935,7 @@ class CategorizedWindCorrectionPipeline:
         export_time_str = now_local.strftime("%Y-%m-%d %H:%M:%S %Z")
 
         export_data = {
-            "version": "MOSMIX_V21",
+            "version": "MOSMIX_V22",
             "updated_at": export_time_str,
             "global_fallback_bias": self.global_fallback_bias,
             "global_std_bias": self.global_std_bias,

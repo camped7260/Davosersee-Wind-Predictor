@@ -53,6 +53,22 @@ DEFAULT_CONFIG = {
         "foil_confirmed_threshold_knots": 10.0,
         "operational_window_utc": [11, 17],
         "rain_prob_confirm_threshold": 50.0,
+        # Pressure-gradient (mosmix_dp_foehn, ZH - LU convention) magnitude
+        # thresholds used by CategorizedWindCorrectionPipeline._prepare_features
+        # to tag is_nordfoehn / is_sudfoehn. Kept as two separate settings
+        # (not one shared "foehn_threshold_hpa") because the two regimes are
+        # physically distinct and foehn_threshold_diagnostic.py's dedicated
+        # confidence analysis found they don't share an optimal cutoff:
+        # Nordfoehn's speed-boost signal is clean and direction-coherent at
+        # ~3.5 hPa, while Sudfoehn's speed-reduction signal -- weaker and,
+        # per the diagnostic's direction-clustering check, not strongly
+        # direction-coherent -- currently only clears the diagnostic's
+        # statistical bar at ~1.5 hPa. See that script's module docstring
+        # and its "SUDFOEHN THRESHOLD -- DEDICATED CONFIDENCE ANALYSIS"
+        # section before changing either value; rerun it as
+        # calibration_db.csv grows to see whether the picture firms up.
+        "nordfoehn_threshold_hpa": 3.5,
+        "sudfoehn_threshold_hpa": 1.5,
     },
     "locations": {
         "davos": {"lat": 46.8041, "lon": 9.8372, "station_id": "06784"}
@@ -307,7 +323,8 @@ def compute_wingfoil_weights(y_true, threshold, max_weight=3.0, k=1.5):
     """
     y_array = np.asarray(y_true)
     w = 1.0 + (max_weight - 1.0) / (1.0 + np.exp(-k * (y_array - threshold)))
-    w[y_array < 5] = 0.2
+    w[y_array < 5] = 0.5
+    w[y_array < 2] = 0.2
     return w
 
 

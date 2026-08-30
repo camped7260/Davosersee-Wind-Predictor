@@ -451,7 +451,7 @@ def generate_mobile_html(days_data, output_file="index.html"):
                     <th>BL (m)</th>
                     <th>Rain Prob (%)</th>
                     <th>Weather</th>
-                    <th>Nordfoehn Grad (hPa)</th>
+                    <th>Foehn Grad (hPa)</th>
                     <th>Regime</th>
                 </tr>
             </thead>
