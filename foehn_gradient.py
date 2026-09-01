@@ -203,10 +203,10 @@ def plot_foehn_gradient(records):
     plt.axhline(0, color='black', linestyle='-', linewidth=1, zorder=2)
     
     # Seuils inversés pour correspondre à la réalité physique : Positif = Nord / Négatif = Sud
-    plt.axhline(4, color='#e74c3c', linestyle='--', alpha=0.8, label='Seuil Nordfoehn (+4 hPa)', zorder=2)
+    plt.axhline(3.5, color='#e74c3c', linestyle='--', alpha=0.8, label='Seuil Nordfoehn (+3.5 hPa)', zorder=2)
 
     # Surlignage des phases actives
-    plt.fill_between(dates, dp, 4, where=[val > 4 for val in dp], facecolor='#e74c3c', alpha=0.25, label='Nordfoehn actif')
+    plt.fill_between(dates, dp, 3.5, where=[val > 3.5 for val in dp], facecolor='#e74c3c', alpha=0.25, label='Nordfoehn actif')
 
     ax = plt.gca()
     ax.xaxis.set_major_locator(mdates.DayLocator(interval=1)) 

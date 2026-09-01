@@ -798,7 +798,60 @@ class CategorizedWindCorrectionPipeline:
                 "intercept": 0.0,
                 "contributions": {}
             }            
-        
+
+    def get_delta_breakdown_fx1(self, row, mos_fx, classification, prec_prob, w_code):
+        """
+        Gust (fx1) counterpart to get_delta_breakdown. Computes the additive
+        decomposition of the gust correction Δ using the same
+        unscale-the-Ridge-coefficients approach, but against
+        bayesian_fx1_models / category_fx1_feature_sets instead of the mean-
+        speed model.
+
+        Note: the gust model is fit unweighted (see process()'s comment on
+        bayesian_fx1_models) and has no rain-multiplicative path of its own
+        -- rain damping is only applied to mean speed (mosmix_ff_kt), not to
+        mosmix_fx1_kt -- so there is no "type": "rain" branch here; a gust
+        row is always either "bayesian" or "no_model".
+        """
+        cat = classification
+        model_cat = self.resolve_category(cat, self.bayesian_fx1_models)
+        if model_cat is not None:
+            pipe = self.bayesian_fx1_models[model_cat]
+            scaler = pipe.named_steps['standardscaler']
+            ridge = pipe.named_steps['bayesianridge']
+            features = self.category_fx1_feature_sets.get(model_cat, [])
+
+            row_dict = row.to_dict()
+            raw_vals = np.array([float(row_dict.get(feat, 0.0)) for feat in features])
+
+            means = scaler.mean_
+            scales = scaler.scale_
+            scaled_coefs = ridge.coef_
+            scaled_intercept = ridge.intercept_
+
+            unscaled_coefs = scaled_coefs / scales
+            unscaled_intercept = scaled_intercept - np.sum((scaled_coefs * means) / scales)
+
+            contributions = {
+                feat: float(coef * val)
+                for feat, coef, val in zip(features, unscaled_coefs, raw_vals)
+            }
+
+            return {
+                "type": "bayesian",
+                "intercept": float(unscaled_intercept),
+                "contributions": contributions
+            }
+
+        # No Bayesian gust model fitted for this category (or its resolved
+        # base regime) -- same "no model -> zero correction" rule as ff.
+        else:
+            return {
+                "type": "no_model",
+                "intercept": 0.0,
+                "contributions": {}
+            }
+
     def process(self, df_input):
         """Executes full forecast correction routing for both wind speeds and gusts."""
         df = self._prepare_features(df_input)
@@ -807,6 +860,7 @@ class CategorizedWindCorrectionPipeline:
         corrected_gusts, std_devs_gusts = [], []
         model_used_tags = []
         total_deltas = []
+        total_deltas_fx1 = []
         cat_mean_offsets, cat_std_offsets = [], []
         calib_intercepts = []
 
@@ -900,6 +954,13 @@ class CategorizedWindCorrectionPipeline:
                 final_gust = raw_fx
                 pred_std_gust = 0.0
 
+            # Same rationale as total_deltas below: keep the UNCLIPPED delta
+            # here so Table 3 (Intercept + Contributions, built from
+            # get_delta_breakdown_fx1) always reconciles with the Total Δ
+            # shown in that table, even on rows where the gust->>=speed
+            # clip below changes the displayed corrected gust itself.
+            final_gust_unclipped = final_gust
+
             # Ensure corrected gust is physically valid (gust >= mean speed)
             final_gust = float(np.clip(final_gust, a_min=final_speed, a_max=None))
 
@@ -915,12 +976,14 @@ class CategorizedWindCorrectionPipeline:
             # column still reflects that; only the *delta breakdown* stays un-clipped for
             # consistency between tables.
             total_deltas.append(final_speed_unclipped - raw_ff)
+            total_deltas_fx1.append(final_gust_unclipped - raw_fx)
 
         df["mosmix_ff_corrected_kt"] = corrected_speeds
         df["mosmix_ff_std_kt"] = std_devs
         df["mosmix_fx1_corrected_kt"] = corrected_gusts
         df["mosmix_fx1_std_kt"] = std_devs_gusts
         df["total_corr_kt"] = total_deltas
+        df["total_corr_fx1_kt"] = total_deltas_fx1
         df["correction_engine"] = model_used_tags
         df["calib_cat_mean_offset"] = cat_mean_offsets
         df["calib_cat_std_offset"] = cat_std_offsets
