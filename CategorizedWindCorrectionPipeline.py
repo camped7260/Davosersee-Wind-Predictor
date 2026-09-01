@@ -64,6 +64,32 @@ class CategorizedWindCorrectionPipeline:
             "rain_prob_confirm_threshold", 50.0
         )
 
+        # Sudden, unforecasted wind-collapse exclusion (see
+        # _flag_unforecasted_collapses). Motivated by 2026-08-31, where a
+        # thunderstorm killed the wind at 16:00-17:00 while om_w_codes /
+        # om_prec_prob hadn't yet reflected it (WMO thunderstorm code only
+        # appeared at 18:00) -- fitting the Bayesian Ridge through hours
+        # like that pulls coefficients toward an event with no learnable
+        # pattern in the feature set, at the cost of the surrounding
+        # correctly-forecast hours. A scan of the full calibration window
+        # (scan_for_unforecasted_collapses.py) found this is not a one-off:
+        # 16 operational-window (11h-17h) hour-over-hour collapses of this
+        # size occurred across 46 days, though 9 of those were already
+        # correctly reflected in om_w_codes/om_prec_prob same-hour and are
+        # intentionally NOT excluded (that's the classifier working as
+        # intended; excluding them would throw away good training signal).
+        # Only the genuinely-late/never-caught subset is excluded.
+        self.collapse_drop_threshold_kt = config["settings"].get(
+            "collapse_drop_threshold_kt", 4.0
+        )
+        self.collapse_prec_prob_threshold = config["settings"].get(
+            "collapse_prec_prob_confirm_threshold",
+            self.rain_prob_confirm_threshold,
+        )
+        self.collapse_lookahead_hours = config["settings"].get(
+            "collapse_lookahead_hours", 4
+        )
+
         # Station coordinates, used to compute season-robust solar-relative
         # diurnal features (see solar_geometry / _add_diurnal_features).
         # Falls back to the Davos config entry since that's currently the
@@ -251,6 +277,138 @@ class CategorizedWindCorrectionPipeline:
             return False
         w = int(w_code)
         return (50 <= w <= 69) or (80 <= w <= 82)
+
+    @staticmethod
+    def is_precip_or_storm_code(w_code):
+        """Broader than is_rain_damping_code: WMO code >= 51 (drizzle and
+        beyond -- rain, snow, showers, AND thunderstorms 95-99), used only
+        by _flag_unforecasted_collapses to check whether om_w_codes had
+        caught up to a real-world wind collapse. is_rain_damping_code
+        deliberately excludes thunderstorm codes (95-99) because
+        apply_rain_multiplicative_factor's damping model was fit on
+        rain-only behaviour, but a thunderstorm arriving IS exactly the
+        kind of event this collapse check needs to detect -- so this is a
+        separate, wider predicate rather than a modification of
+        is_rain_damping_code's existing (narrower, correct-for-its-purpose)
+        range.
+        """
+        if pd.isna(w_code):
+            return False
+        return int(w_code) >= 51
+
+    def _flag_unforecasted_collapses(self, df):
+        """Flags hourly rows that are part of a verified sudden wind
+        collapse (obs_speed dropping by >= self.collapse_drop_threshold_kt
+        within one hour) that om_w_codes / om_prec_prob had NOT yet
+        reflected at the hour the collapse began.
+
+        Motivating case: 2026-08-31, where a thunderstorm cut obs_speed
+        from ~15.7kt to ~9.6kt (15:00->16:00) then to ~3.4kt (16:00->17:00)
+        while om_w_codes still read "Partly cloudy"/"Overcast" -- the WMO
+        thunderstorm code (95) only appeared at 18:00, one to two hours
+        after the collapse began. A weighted Bayesian Ridge fit
+        (compute_wingfoil_weights upweights points near the go/no-go
+        threshold, which these transitional hours often sit at/near) will
+        happily spend fitting capacity trying to reduce error on an event
+        that has no learnable pattern in mosmix_ff_kt/om_bl_height/etc.,
+        at the expense of the surrounding, normally-forecast hours.
+
+        Both ends of a collapsing hour-pair are flagged (the hour the drop
+        STARTS and the hour it LANDS), and consecutive collapses chain into
+        one contiguous excluded span (see 2026-08-31 15:00->16:00->17:00
+        below, which chains into a single 15:00-17:00 exclusion).
+
+        Deliberately narrower than "every large hour-over-hour drop":
+        - Only flags drops where om_w_codes/om_prec_prob had NOT already
+          reflected the event in the SAME hour the drop started. A drop
+          that the forecast already correctly saw coming (e.g. 2026-08-17
+          13:00, Light rain at 100% prec_prob, dropped -4.6kt) is left in
+          the fit -- excluding it would throw away a case where the
+          classifier and correction are working exactly as intended.
+        - Only applied within self.op_window (11h-17h UTC by default) --
+          evening wind-down after the operational window is the normal
+          end of the daily thermal cycle, not a surprise event, and
+          dominates the raw drop count (30 of 46 hour-over-hour drops
+          across the calibration window fall outside 11h-17h).
+        - Uses a forward lookahead (self.collapse_lookahead_hours) so a
+          drop the forecast catches up to a few hours later is still
+          excluded (it was still a real-time surprise when it happened),
+          but this is a scan-time diagnostic decision, not a claim that
+          the forecast was "wrong" for longer than it actually was.
+
+        See scan_for_unforecasted_collapses.py for the standalone version
+        of this same logic used to establish scope before this method was
+        written -- keep the two in sync if the detection rule changes.
+
+        Returns df with an added boolean column 'is_unforecasted_collapse'.
+        Does not modify or drop any rows -- callers decide what to do with
+        the flag (fit_from_database excludes flagged rows from the Bayesian
+        Ridge fit only; they remain in df_db/replay/reporting throughout).
+        """
+        df = df.copy()
+        df["is_unforecasted_collapse"] = False
+
+        if "obs_speed" not in df.columns or "om_w_codes" not in df.columns:
+            return df
+
+        required = ["date", "hour"]
+        if not all(c in df.columns for c in required):
+            return df
+
+        df["_dt"] = pd.to_datetime(
+            df["date"].astype(str) + " " + df["hour"].astype(str).str.zfill(2) + ":00"
+        )
+        df = df.sort_values("_dt").reset_index(drop=False)  # keep original index in 'index' col
+
+        df["_date_only"] = df["_dt"].dt.normalize()
+        df["_obs_next"] = df["obs_speed"].shift(-1)
+        df["_date_next"] = df["_date_only"].shift(-1)
+        df["_same_day_as_next"] = df["_date_only"] == df["_date_next"]
+        df["_drop"] = df["obs_speed"] - df["_obs_next"]
+
+        win_start, win_end = self.op_window
+        df["_in_window"] = df["_dt"].dt.hour.between(win_start, win_end)
+
+        candidates = df[
+            df["_same_day_as_next"]
+            & (df["_drop"] >= self.collapse_drop_threshold_kt)
+            & df["obs_speed"].notna()
+            & df["_obs_next"].notna()
+            & df["_in_window"]
+        ]
+
+        flagged_positions = set()
+        for _, row in candidates.iterrows():
+            same_hour_code = row.get("om_w_codes")
+            same_hour_prob = row.get("om_prec_prob")
+            already_forecast = self.is_precip_or_storm_code(same_hour_code) or (
+                pd.notna(same_hour_prob) and same_hour_prob >= self.collapse_prec_prob_threshold
+            )
+            if already_forecast:
+                continue  # classifier already caught it -- keep in the fit
+
+            start_dt = row["_dt"]
+            window_end = start_dt + pd.Timedelta(hours=self.collapse_lookahead_hours)
+            window = df[(df["_dt"] >= start_dt) & (df["_dt"] <= window_end)]
+
+            # Flag both ends of the collapsing pair. If a run of hours in
+            # the lookahead window are also part of chained collapses (as
+            # with 08-31's back-to-back drops), they get individually
+            # flagged as their own candidate rows too, so the union
+            # naturally covers the full contiguous span.
+            pos_start = df.index.get_loc(row.name)
+            flagged_positions.add(pos_start)
+            if pos_start + 1 < len(df):
+                flagged_positions.add(pos_start + 1)
+
+        if flagged_positions:
+            flagged_orig_idx = df.iloc[sorted(flagged_positions)]["index"].tolist()
+            df["is_unforecasted_collapse"] = df["index"].isin(flagged_orig_idx)
+
+        df = df.set_index("index").sort_index()
+        df = df.drop(columns=["_dt", "_date_only", "_obs_next", "_date_next",
+                               "_same_day_as_next", "_drop", "_in_window"], errors="ignore")
+        return df
 
     def classify_precip_type(self, row):
         """Labels the precipitation regime for a row.
@@ -574,6 +732,30 @@ class CategorizedWindCorrectionPipeline:
             if df_db.empty:
                 return
 
+            # Flag verified sudden wind collapses BEFORE the operational-
+            # window filter below, since detection needs the hour just
+            # after a collapse that starts near the window edge (e.g. a
+            # 17:00 collapse landing at 18:00) to see whether/when
+            # om_w_codes catches up -- see _flag_unforecasted_collapses
+            # docstring. Motivated by 2026-08-31's thunderstorm (wind
+            # killed at 16:00-17:00 while om_w_codes still read "Partly
+            # cloudy"/"Overcast", only flipping to Thunderstorm at 18:00);
+            # generalized after scan_for_unforecasted_collapses.py found
+            # this is not a one-off (9 similar in-window cases across the
+            # 46-day calibration window). Flagged rows are excluded from
+            # every fitting statistic below (mean/std offsets AND the
+            # Bayesian Ridge) but are NOT dropped from df_db -- process()/
+            # replay still score predictions against them normally, so
+            # accuracy reporting keeps counting these hours as the misses
+            # they are, rather than hiding them.
+            df_db = self._flag_unforecasted_collapses(df_db)
+            n_collapse_flagged = int(df_db["is_unforecasted_collapse"].sum())
+            if n_collapse_flagged:
+                print(f"⚠️ {n_collapse_flagged} row(s) flagged as unforecasted wind "
+                      f"collapses (sudden drop >= {self.collapse_drop_threshold_kt}kt, "
+                      f"om_w_codes/om_prec_prob not yet reflecting it) -- excluded from "
+                      f"model fitting, retained for replay/accuracy reporting.")
+
             if 'hour' in df_db.columns:
                 df_db['hour_int'] = df_db['hour'].apply(
                     lambda x: int(str(x).split(':')[0]) if pd.notna(x) else np.nan
@@ -583,21 +765,27 @@ class CategorizedWindCorrectionPipeline:
             if df_db.empty:
                 return
 
-            if "mosmix_fx1_kt" in df_db.columns and "obs_gust" in df_db.columns:
-                df_db["delta_fx1_obs_gust"] = df_db["mosmix_fx1_kt"] - df_db["obs_gust"]
-                clean_fx_global = df_db.dropna(subset=["delta_fx1_obs_gust"])
+            # df_fit excludes flagged collapse rows from here on -- used
+            # for every mean/std offset and Bayesian Ridge fit below.
+            # df_db itself keeps them, unaffected, for anything downstream
+            # that scores against the full dataset (replay/reporting).
+            df_fit = df_db[~df_db["is_unforecasted_collapse"]].copy()
+
+            if "mosmix_fx1_kt" in df_fit.columns and "obs_gust" in df_fit.columns:
+                df_fit["delta_fx1_obs_gust"] = df_fit["mosmix_fx1_kt"] - df_fit["obs_gust"]
+                clean_fx_global = df_fit.dropna(subset=["delta_fx1_obs_gust"])
                 if not clean_fx_global.empty:
                     self.global_fx1_fallback_bias = float(clean_fx_global["delta_fx1_obs_gust"].mean())
                     self.global_fx1_std_bias = float(clean_fx_global["delta_fx1_obs_gust"].std(ddof=1)) if len(clean_fx_global) > 1 else 0.0
                     
-            df_db["delta_ff_obs"] = df_db["mosmix_ff_kt"] - df_db["obs_speed"]
-            self.global_fallback_bias = float(df_db["delta_ff_obs"].mean())
-            self.global_std_bias = float(df_db["delta_ff_obs"].std(ddof=1)) if len(df_db) > 1 else 0.0
+            df_fit["delta_ff_obs"] = df_fit["mosmix_ff_kt"] - df_fit["obs_speed"]
+            self.global_fallback_bias = float(df_fit["delta_ff_obs"].mean())
+            self.global_std_bias = float(df_fit["delta_ff_obs"].std(ddof=1)) if len(df_fit) > 1 else 0.0
 
-            df_db = self._prepare_features(df_db)
+            df_fit = self._prepare_features(df_fit)
 
             # Fit per category combination using BayesianRidge
-            for cat, group in df_db.groupby("classification"):
+            for cat, group in df_fit.groupby("classification"):
                 group = group.copy()
 
                 # Skip categories that are structurally unreachable at
@@ -998,7 +1186,7 @@ class CategorizedWindCorrectionPipeline:
         export_time_str = now_local.strftime("%Y-%m-%d %H:%M:%S %Z")
 
         export_data = {
-            "version": "MOSMIX_V22",
+            "version": "MOSMIX_V23",
             "updated_at": export_time_str,
             "global_fallback_bias": self.global_fallback_bias,
             "global_std_bias": self.global_std_bias,

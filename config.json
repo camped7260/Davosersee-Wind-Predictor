@@ -1,9 +1,9 @@
 {
     "category_feature_sets": {
         "Sunny": [
-            "om_bl_height",
             "om_bl_height_higher_than_1400",
-            "daylight_frac_elapsed"
+            "daylight_frac_elapsed",
+            "om_bl_height_higher_than_1600"
         ],
         "Sudfoehn + Sunny": [
             "om_bl_height_higher_than_1400",
@@ -11,20 +11,20 @@
             "om_bl_height_higher_than_1600"
         ],
         "NordFoehn + PartlyCloudy": [
-            "mosmix_rad_kj",
-            "om_bl_height"
+            "om_bl_height",
+            "mosmix_tt_c"
         ],
         "PartlyCloudy": [
             "mosmix_dp_foehn",
-            "mosmix_v_kt"
-        ],
-        "Sudfoehn + PartlyCloudy": [
-            "mosmix_ff_kt"
+            "mosmix_u_kt"
         ],
         "NordFoehn + Cloudy + Precip(Rain)": [
             "mosmix_ff_kt"
         ],
         "Cloudy": [
+            "mosmix_ff_kt"
+        ],
+        "Sudfoehn + PartlyCloudy": [
             "mosmix_ff_kt"
         ],
         "NordFoehn + Sunny": [
@@ -33,9 +33,8 @@
     },
     "category_fx1_feature_sets": {
         "Sunny": [
-            "mosmix_cloud_pct",
-            "om_wind_speed_700hPa_kt",
-            "mosmix_tt_c"
+            "mosmix_tt_c",
+            "om_wind_speed_700hPa_kt"
         ],
         "Sudfoehn + Sunny": [
             "mosmix_rad_kj",
@@ -43,21 +42,20 @@
             "om_soil_temp_0cm"
         ],
         "NordFoehn + PartlyCloudy": [
-            "daylight_frac_elapsed",
-            "om_bl_height",
-            "mosmix_dp_foehn"
+            "mosmix_dp_foehn",
+            "daylight_frac_elapsed"
         ],
         "PartlyCloudy": [
             "mosmix_rad_kj",
-            "mosmix_cloud_pct"
-        ],
-        "Sudfoehn + PartlyCloudy": [
-            "mosmix_ff_kt"
+            "mosmix_u_kt"
         ],
         "NordFoehn + Cloudy + Precip(Rain)": [
             "mosmix_ff_kt"
         ],
         "Cloudy": [
+            "mosmix_ff_kt"
+        ],
+        "Sudfoehn + PartlyCloudy": [
             "mosmix_ff_kt"
         ],
         "NordFoehn + Sunny": [

@@ -319,6 +319,7 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
             color="#e67e22", alpha=0.15, zorder=1
         )
 
+    obs_sp, gust_sp = [], []
     if dssc_obs:
         obs_h = [
             int(k.split(":")[0]) 
@@ -351,11 +352,39 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
     
     # Limits & Spacing
     ax.set_xlim(10, 19)
-    ax.set_ylim(0, 25)
     ax.set_xticks(range(10, 20))
-    
+
+    # Y-axis upper bound: 25kt by default, grown in 5kt increments only
+    # when the data actually needs the extra headroom (raw/corrected wind
+    # & gust and DSSC observations -- the ±1 std uncertainty bands are
+    # deliberately NOT considered here, so a wide-but-low-confidence band
+    # doesn't by itself push the axis taller), rather than clipping tall
+    # days at a fixed 25kt ceiling.
+    DEFAULT_Y_MAX = 25
+    Y_STEP = 5.0
+    candidate_maxes = [
+        df_day["mosmix_ff_kt"].max(skipna=True),
+        df_day["mosmix_fx1_kt"].max(skipna=True),
+        corr_ff.max(skipna=True),
+        corr_fx.max(skipna=True),
+    ]
+    if obs_sp:
+        candidate_maxes.append(max(obs_sp))
+    if gust_sp:
+        candidate_maxes.append(max(gust_sp))
+
+    candidate_maxes = [v for v in candidate_maxes if pd.notna(v)]
+    data_max = max(candidate_maxes) if candidate_maxes else 0.0
+
+    if data_max > DEFAULT_Y_MAX:
+        y_max = int(np.ceil(data_max / Y_STEP) * Y_STEP)
+    else:
+        y_max = DEFAULT_Y_MAX
+
+    ax.set_ylim(0, y_max)
+
     # 1-knot grid ticks on the y-axis
-    y_ticks = np.arange(0, 26, 1)
+    y_ticks = np.arange(0, y_max + 1, 1)
     y_labels = [str(y) if y % 1 == 0 else "" for y in y_ticks]
     ax.set_yticks(y_ticks)
     ax.set_yticklabels(y_labels)
@@ -368,7 +397,7 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
     ax.set_ylabel("Wind Speed (knots)")
     ax.set_title(f"Davosersee Forecast — {date_with_weekday}", fontsize=11, fontweight="bold")
     ax.grid(True, linestyle=":", alpha=0.6)
-    ax.legend(loc="upper right", fontsize=7, framealpha=0.8)
+    ax.legend(loc="lower right", fontsize=7, framealpha=0.8)
 
     if build_time_str:
         fig.text(
