@@ -877,10 +877,10 @@ class CategorizedWindCorrectionPipeline:
         # Keeping this as a single shared check is what guarantees a row
         # tagged "Precip(Rain)" always gets damped here, and a row that
         # doesn't clear the bar is tagged "Rain_LowConf" instead of "Rain".
-        is_rain_code = self.is_rain_damping_code(w_code)
+        is_precip_or_storm_code = self.is_precip_or_storm_code(w_code)
         prec_prob_known = pd.notna(prec_prob)
 
-        triggers = is_rain_code and prec_prob_known and prec_prob > self.rain_prob_confirm_threshold
+        triggers = is_precip_or_storm_code and prec_prob_known and prec_prob > self.rain_prob_confirm_threshold
         floor = 0.33
 
         if triggers:
