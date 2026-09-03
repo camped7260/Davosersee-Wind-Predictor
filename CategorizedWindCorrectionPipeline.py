@@ -279,18 +279,47 @@ class CategorizedWindCorrectionPipeline:
         return (50 <= w <= 69) or (80 <= w <= 82)
 
     @staticmethod
+    def is_storm_damping_code(w_code):
+        """WMO thunderstorm codes (90-99, the same range classify_precip_type
+        uses for its "Thunderstorm" label) treated as ALSO damping-eligible
+        for apply_rain_multiplicative_factor, on equal footing with
+        is_rain_damping_code's rain/drizzle/shower range: a confirmed
+        thunderstorm collapses wind at least as reliably as confirmed rain,
+        so there's no physical reason to withhold the multiplicative
+        correction from it once om_prec_prob clears
+        rain_prob_confirm_threshold.
+
+        Kept as its own predicate rather than folded into
+        is_rain_damping_code so the two physically distinct trigger sets
+        (steady rain vs. convective storms) stay separately documented and
+        independently adjustable if they ever need different thresholds or
+        floors. Single source of truth shared by apply_rain_multiplicative_
+        factor, classify_precip_type, and is_category_rain_locked -- the
+        same three call sites that share is_rain_damping_code, and for the
+        same reason (keeps classification and the physical correction
+        consistent by construction; see classify_precip_type's docstring).
+        """
+        if pd.isna(w_code):
+            return False
+        return 90 <= int(w_code) <= 99
+
+    @staticmethod
     def is_precip_or_storm_code(w_code):
-        """Broader than is_rain_damping_code: WMO code >= 51 (drizzle and
-        beyond -- rain, snow, showers, AND thunderstorms 95-99), used only
-        by _flag_unforecasted_collapses to check whether om_w_codes had
-        caught up to a real-world wind collapse. is_rain_damping_code
-        deliberately excludes thunderstorm codes (95-99) because
-        apply_rain_multiplicative_factor's damping model was fit on
-        rain-only behaviour, but a thunderstorm arriving IS exactly the
-        kind of event this collapse check needs to detect -- so this is a
-        separate, wider predicate rather than a modification of
-        is_rain_damping_code's existing (narrower, correct-for-its-purpose)
-        range.
+        """Broader than is_rain_damping_code/is_storm_damping_code: WMO code
+        >= 51 (drizzle and beyond -- rain, snow, showers, AND thunderstorms
+        95-99), used only by _flag_unforecasted_collapses to check whether
+        om_w_codes had caught up to a real-world wind collapse.
+
+        This predicate does NOT require om_prec_prob to clear
+        rain_prob_confirm_threshold the way is_rain_damping_code/
+        is_storm_damping_code do for damping purposes -- it only asks "did
+        the forecast code itself already reflect SOME precip/storm event",
+        which is a materially different and looser question than "is this
+        confirmed enough to damp the forecast". So even though
+        apply_rain_multiplicative_factor now also damps confirmed
+        thunderstorms (is_storm_damping_code), this collapse-detection
+        predicate is kept as its own separate, wider range rather than
+        being expressed in terms of the two damping predicates.
         """
         if pd.isna(w_code):
             return False
@@ -429,6 +458,13 @@ class CategorizedWindCorrectionPipeline:
         correction for exactly the hours that escape damping, rather than
         letting them fall through resolve_category to a dry-weather model
         with no precip signal at all.
+
+        Thunderstorm codes (is_storm_damping_code, 90-99) now get the exact
+        same confirmed/low-confidence split as rain, for the same reason:
+        apply_rain_multiplicative_factor damps confirmed thunderstorms just
+        like confirmed rain (see is_storm_damping_code), so a row can no
+        longer be tagged "Thunderstorm" while the damping factor silently
+        leaves it undamped, or vice versa.
         """
         if not row.get("is_precip", False):
             return "No_Precip"
@@ -439,15 +475,14 @@ class CategorizedWindCorrectionPipeline:
 
         w_code = int(w_code)
         prec_prob = row.get("om_prec_prob", np.nan)
+        prec_prob_confirmed = pd.notna(prec_prob) and prec_prob > self.rain_prob_confirm_threshold
 
         if self.is_rain_damping_code(w_code):
-            if pd.notna(prec_prob) and prec_prob > self.rain_prob_confirm_threshold:
-                return "Rain"
-            return "Rain_LowConf"
+            return "Rain" if prec_prob_confirmed else "Rain_LowConf"
         elif (70 <= w_code <= 79) or (85 <= w_code <= 86):
             return "Snow"
-        elif 90 <= w_code <= 99:
-            return "Thunderstorm"
+        elif self.is_storm_damping_code(w_code):
+            return "Thunderstorm" if prec_prob_confirmed else "Thunderstorm_LowConf"
         else:
             return "Other_Precip"
             
@@ -870,24 +905,28 @@ class CategorizedWindCorrectionPipeline:
     def apply_rain_multiplicative_factor(self, raw_speed, prec_prob, w_code):
 
         if raw_speed < 1.2:
-            return raw_speed, 1.0
+            return raw_speed, 1.0, None
 
-        # Same predicate and threshold classify_precip_type uses to tag a
-        # row "Rain" -- see is_rain_damping_code / rain_prob_confirm_threshold.
-        # Keeping this as a single shared check is what guarantees a row
-        # tagged "Precip(Rain)" always gets damped here, and a row that
-        # doesn't clear the bar is tagged "Rain_LowConf" instead of "Rain".
-        is_precip_or_storm_code = self.is_precip_or_storm_code(w_code)
+        # Same predicates and threshold classify_precip_type uses to tag a
+        # row "Rain"/"Thunderstorm" -- see is_rain_damping_code /
+        # is_storm_damping_code / rain_prob_confirm_threshold. Keeping this
+        # as a single shared check is what guarantees a row tagged
+        # "Precip(Rain)" or "Precip(Thunderstorm)" always gets damped here,
+        # and a row that doesn't clear the bar is tagged "..._LowConf"
+        # instead.
+        is_rain_code = self.is_rain_damping_code(w_code)
+        is_storm_code = self.is_storm_damping_code(w_code)
         prec_prob_known = pd.notna(prec_prob)
 
-        triggers = is_precip_or_storm_code and prec_prob_known and prec_prob > self.rain_prob_confirm_threshold
+        triggers = (is_rain_code or is_storm_code) and prec_prob_known and prec_prob > self.rain_prob_confirm_threshold
         floor = 0.33
 
         if triggers:
             damping_factor = max(floor, 1.0 - ((1.0 - floor) * (prec_prob / 100.0)))
-            return raw_speed * damping_factor, damping_factor
+            trigger_kind = "storm" if is_storm_code else "rain"
+            return raw_speed * damping_factor, damping_factor, trigger_kind
 
-        return raw_speed, 1.0
+        return raw_speed, 1.0, None
 
     def is_category_rain_locked(self, cat_df):
         """True if every row in cat_df would be fully absorbed by
@@ -899,12 +938,13 @@ class CategorizedWindCorrectionPipeline:
         triggers, its result is used and nothing below it (including any
         model or offset fit for this category) is ever consulted (see
         get_delta_breakdown / process()). Because classify_precip_type now
-        gates the "Rain" label on the exact same is_rain_damping_code +
-        rain_prob_confirm_threshold check damping uses, a "... +
-        Precip(Rain)" category only exists when every one of its rows
-        already cleared that trigger -- so fitting or recommending features
-        for it produces numbers that are computed correctly but can never
-        actually be applied.
+        gates the "Rain"/"Thunderstorm" labels on the exact same
+        is_rain_damping_code/is_storm_damping_code + rain_prob_confirm_
+        threshold checks damping uses, a "... + Precip(Rain)" or "... +
+        Precip(Thunderstorm)" category only exists when every one of its
+        rows already cleared that trigger -- so fitting or recommending
+        features for it produces numbers that are computed correctly but
+        can never actually be applied.
 
         Single source of truth for this check, shared by
         fit_from_database's per-category skip and run_database_analysis's
@@ -916,7 +956,8 @@ class CategorizedWindCorrectionPipeline:
         if cat_df.empty:
             return False
         return bool(cat_df.apply(
-            lambda r: self.is_rain_damping_code(r.get("om_w_codes"))
+            lambda r: (self.is_rain_damping_code(r.get("om_w_codes"))
+                       or self.is_storm_damping_code(r.get("om_w_codes")))
             and pd.notna(r.get("om_prec_prob"))
             and r.get("om_prec_prob") > self.rain_prob_confirm_threshold,
             axis=1,
@@ -927,12 +968,14 @@ class CategorizedWindCorrectionPipeline:
         Calcule la décomposition additive exacte des contributions des facteurs au Δ (correction du vent).
         Retourne un dictionnaire exploitable par la table d'analyse.
         """
-        # 1. Cas du facteur multiplicatif de pluie
-        _, factor = self.apply_rain_multiplicative_factor(mos_ff, prec_prob, w_code)
+        # 1. Cas du facteur multiplicatif de pluie (ou orage -- voir
+        # is_storm_damping_code)
+        _, factor, trigger_kind = self.apply_rain_multiplicative_factor(mos_ff, prec_prob, w_code)
         if factor < 1.0:
             return {
                 "type": "rain",
-                "factor": factor
+                "factor": factor,
+                "trigger": trigger_kind,
             }
 
         # 2. Cas du modèle Bayésien
@@ -1074,12 +1117,13 @@ class CategorizedWindCorrectionPipeline:
             # =========================================================
             # MEAN SPEED CORRECTION (ff)
             # =========================================================
-            rain_damped_ff, factor = self.apply_rain_multiplicative_factor(raw_ff, prec_prob, w_code)
-            
+            rain_damped_ff, factor, trigger_kind = self.apply_rain_multiplicative_factor(raw_ff, prec_prob, w_code)
+
             if factor < 1.0:
                 final_speed = rain_damped_ff
                 pred_std = 0.0
-                model_tag = f"Rain Mult ({factor:.2f}x)"
+                tag_label = "Storm Mult" if trigger_kind == "storm" else "Rain Mult"
+                model_tag = f"{tag_label} ({factor:.2f}x)"
 
             elif self.resolve_category(cat, self.bayesian_models) is not None:
                 ff_model_cat = self.resolve_category(cat, self.bayesian_models)
@@ -1107,16 +1151,16 @@ class CategorizedWindCorrectionPipeline:
                 pred_std = 0.0
                 model_tag = "No Model (raw MOS, global fallback)"
 
-            # Surface it when a row carries a rain code that didn't clear
-            # rain_prob_confirm_threshold (classify_precip_type's
-            # "Rain_LowConf") and ends up corrected by something other than
-            # the rain multiplicative path -- i.e. precip is present in the
-            # input but nothing in the applied correction accounts for it.
-            # Without this tag such rows are indistinguishable in
-            # correction_engine from ordinary dry-weather corrections (see
-            # the 2026-08-02 / 2026-08-15 calibration_db.csv rows this was
-            # written for).
-            if row.get("precip_type") == "Rain_LowConf" and factor >= 1.0:
+            # Surface it when a row carries a rain or storm code that didn't
+            # clear rain_prob_confirm_threshold (classify_precip_type's
+            # "Rain_LowConf" / "Thunderstorm_LowConf") and ends up corrected
+            # by something other than the rain/storm multiplicative path --
+            # i.e. precip or a storm is present in the input but nothing in
+            # the applied correction accounts for it. Without this tag such
+            # rows are indistinguishable in correction_engine from ordinary
+            # dry-weather corrections (see the 2026-08-02 / 2026-08-15
+            # calibration_db.csv rows this was written for).
+            if row.get("precip_type") in ("Rain_LowConf", "Thunderstorm_LowConf") and factor >= 1.0:
                 model_tag = f"{model_tag} [low-conf precip, unmodeled]"
 
             final_speed_unclipped = final_speed

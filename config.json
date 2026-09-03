@@ -1,9 +1,9 @@
 {
     "category_feature_sets": {
         "Sunny": [
-            "om_bl_height_higher_than_1400",
+            "om_bl_height_higher_than_1600",
             "daylight_frac_elapsed",
-            "om_bl_height_higher_than_1600"
+            "om_bl_height_higher_than_1400"
         ],
         "Sudfoehn + Sunny": [
             "om_bl_height_higher_than_1400",
@@ -15,8 +15,8 @@
             "mosmix_tt_c"
         ],
         "PartlyCloudy": [
-            "mosmix_dp_foehn",
-            "mosmix_u_kt"
+            "om_bl_height_higher_than_1400",
+            "mosmix_dp_foehn"
         ],
         "NordFoehn + Cloudy + Precip(Rain)": [
             "mosmix_ff_kt"
@@ -33,6 +33,7 @@
     },
     "category_fx1_feature_sets": {
         "Sunny": [
+            "mosmix_cloud_pct",
             "mosmix_tt_c",
             "om_wind_speed_700hPa_kt"
         ],
