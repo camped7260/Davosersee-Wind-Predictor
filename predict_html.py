@@ -57,6 +57,8 @@ from wf_common import (
     clean_namespaces,
     fetch_ms_hourly_data,
     get_ms_hourly_for_date,
+    fetch_ms_now_data,
+    compute_ms_hourly_so_far,
 )
 
 # =====================================================================
@@ -288,7 +290,8 @@ def process_dssc_hourly(wind_data, wind_dir_data, temp_data, target_date):
 # GRAPH GENERATION
 # =====================================================================
 
-def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=None, ms_obs=None):
+def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=None, ms_obs=None,
+                        ms_now_hours=None, ms_now_speed=None, ms_now_gust=None):
     fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
     hours = df_day.index.hour
     
@@ -400,6 +403,25 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
             ax.scatter(ms_gust_h, ms_gust_sp, color="#e67e22", marker="x",
                        label="MS (MeteoSwiss DAV) Gust", zorder=5, s=30)
 
+    # MS 10-minute "now" curve -- only ever populated for the current day
+    # (see main()'s ms_now_df handling, mirroring wingfoil_predictor.py's
+    # analyze_day / plot_prediction_summary). Drawn as thin, semi-
+    # transparent lines (not scatter) at the same MS green/orange colors
+    # so it reads as the fine-grained trace behind the same-colored
+    # hourly MS markers above, rather than a third, competing series.
+    if ms_now_hours is not None and ms_now_speed is not None and pd.Series(ms_now_speed).notna().any():
+        ax.plot(
+            ms_now_hours, ms_now_speed,
+            label="MS (MeteoSwiss DAV) 10-min Speed", color="#2ecc71",
+            linewidth=1.0, alpha=0.5, zorder=4
+        )
+    if ms_now_hours is not None and ms_now_gust is not None and pd.Series(ms_now_gust).notna().any():
+        ax.plot(
+            ms_now_hours, ms_now_gust,
+            label="MS (MeteoSwiss DAV) 10-min Gust", color="#e67e22",
+            linewidth=1.0, alpha=0.5, zorder=4
+        )
+
     ax.axhline(CONFIG["settings"]["wind_threshold_knots"], color="#e74c3c", linestyle=":", alpha=0.7, label="Threshold (10kt)")
     
     # Limits & Spacing
@@ -428,6 +450,10 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
         candidate_maxes.append(max(ms_sp))
     if ms_gust_sp:
         candidate_maxes.append(max(ms_gust_sp))
+    if ms_now_speed is not None and pd.Series(ms_now_speed).notna().any():
+        candidate_maxes.append(pd.Series(ms_now_speed).max(skipna=True))
+    if ms_now_gust is not None and pd.Series(ms_now_gust).notna().any():
+        candidate_maxes.append(pd.Series(ms_now_gust).max(skipna=True))
 
     candidate_maxes = [v for v in candidate_maxes if pd.notna(v)]
     data_max = max(candidate_maxes) if candidate_maxes else 0.0
@@ -713,8 +739,34 @@ def main():
 
             ms_hourly = get_ms_hourly_for_date(ms_df, d_str)
 
+            # For TODAY only, additionally pull the MS 10-minute "_t_now_"
+            # file (same as wingfoil_predictor.py's main()): it gives a
+            # running average for the current, still-incomplete hour
+            # (folded into ms_hourly so the table's current-hour row and
+            # the "GO" badge see it too) plus the raw 10-minute points
+            # used for the finer-grained "now" curve on the graph. Past
+            # days are untouched -- ms_now_hours/speed/gust stay None.
+            ms_now_hours = ms_now_speed = ms_now_gust = None
+            if d_str == today.strftime("%Y-%m-%d"):
+                print("📥 Récupération des observations MS 10 min (station DAV, jour courant)...")
+                ms_now_df = fetch_ms_now_data(station_abbr=ms_station_abbr)
+                ms_hourly_so_far = compute_ms_hourly_so_far(ms_now_df, d_str)
+                for hour_str, obs in ms_hourly_so_far.items():
+                    ms_hourly[hour_str] = obs
+
+                if ms_now_df is not None and not ms_now_df.empty:
+                    day_mask = ms_now_df.index.strftime("%Y-%m-%d") == d_str
+                    ms_now_day = ms_now_df[day_mask]
+                    if not ms_now_day.empty:
+                        ms_now_hours = ms_now_day.index.hour + ms_now_day.index.minute / 60.0
+                        ms_now_speed = ms_now_day["ms_speed_kt"] if "ms_speed_kt" in ms_now_day else None
+                        ms_now_gust = ms_now_day["ms_gust_kt"] if "ms_gust_kt" in ms_now_day else None
+
             graph_name = img_names[i]
-            generate_day_graph(d_str, df_day, dssc_hourly, graph_name, build_time_str=build_time_str, ms_obs=ms_hourly)
+            generate_day_graph(
+                d_str, df_day, dssc_hourly, graph_name, build_time_str=build_time_str, ms_obs=ms_hourly,
+                ms_now_hours=ms_now_hours, ms_now_speed=ms_now_speed, ms_now_gust=ms_now_gust
+            )
             days_data[d_str] = {
                 "df": df_day,
                 "dssc": dssc_hourly,
