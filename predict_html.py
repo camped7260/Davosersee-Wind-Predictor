@@ -387,7 +387,7 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
         ]
         if ms_speed_h:
             ax.scatter(ms_speed_h, ms_sp, color="#2ecc71", marker="o",
-                       label="MS (MeteoSwiss DAV) Speed", zorder=5, s=30)
+                       label="MS Speed", zorder=5, s=30)
 
         ms_gust_h = [
             int(k.split(":")[0])
@@ -401,7 +401,7 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
         ]
         if ms_gust_h:
             ax.scatter(ms_gust_h, ms_gust_sp, color="#e67e22", marker="x",
-                       label="MS (MeteoSwiss DAV) Gust", zorder=5, s=30)
+                       label="MS Gust", zorder=5, s=30)
 
     # MS 10-minute "now" curve -- only ever populated for the current day
     # (see main()'s ms_now_df handling, mirroring wingfoil_predictor.py's
@@ -412,13 +412,13 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
     if ms_now_hours is not None and ms_now_speed is not None and pd.Series(ms_now_speed).notna().any():
         ax.plot(
             ms_now_hours, ms_now_speed,
-            label="MS (MeteoSwiss DAV) 10-min Speed", color="#2ecc71",
+            label="MS 10min Sp.", color="#2ecc71",
             linewidth=1.0, alpha=0.5, zorder=4
         )
     if ms_now_hours is not None and ms_now_gust is not None and pd.Series(ms_now_gust).notna().any():
         ax.plot(
             ms_now_hours, ms_now_gust,
-            label="MS (MeteoSwiss DAV) 10-min Gust", color="#e67e22",
+            label="MS 10min Gust", color="#e67e22",
             linewidth=1.0, alpha=0.5, zorder=4
         )
 
@@ -479,7 +479,7 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
     ax.set_ylabel("Wind Speed (knots)")
     ax.set_title(f"Davosersee Forecast — {date_with_weekday}", fontsize=11, fontweight="bold")
     ax.grid(True, linestyle=":", alpha=0.6)
-    ax.legend(loc="lower right", fontsize=7, framealpha=0.8)
+    ax.legend(loc="upper right", fontsize=7, framealpha=0.8)
 
     if build_time_str:
         fig.text(
