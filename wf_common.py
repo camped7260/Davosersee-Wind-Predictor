@@ -28,9 +28,12 @@ CategorizedWindCorrectionPipeline.py imported from predict_html.py.
 import json
 import math
 import os
+import io
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+import requests
 
 # =====================================================================
 # CONFIGURATION
@@ -71,7 +74,7 @@ DEFAULT_CONFIG = {
         "sudfoehn_threshold_hpa": 1.5,
     },
     "locations": {
-        "davos": {"lat": 46.8041, "lon": 9.8372, "station_id": "06784"}
+        "davos": {"lat": 46.8041, "lon": 9.8372, "station_id": "06784", "ms_station_abbr": "DAV"}
     },
     "category_feature_sets": {},
     "category_fx1_feature_sets": {},
@@ -326,6 +329,371 @@ def compute_wingfoil_weights(y_true, threshold, max_weight=3.0, k=1.5):
     w[y_array < 5] = 0.5
     w[y_array < 2] = 0.2
     return w
+
+
+# =====================================================================
+# METEOSWISS (MS) STATION -- DAV (DAVOS), SwissMetNet OPEN DATA
+# =====================================================================
+#
+# MeteoSwiss's SwissMetNet Open Data API (data.geo.admin.ch) publishes
+# real OBSERVED (not forecast) hourly station data, free, no API key.
+# "MS" is this toolchain's abbreviation for MeteoSwiss, and "DAV" is
+# MeteoSwiss's own three-letter code for the Davos station -- the same
+# physical site as DSSC (see locations.davos in DEFAULT_CONFIG), so MS is
+# a second, independent observation source for the same location rather
+# than a different site like the Chur/Bad Ragaz stations explored for
+# feature-engineering experiments elsewhere in this project's history.
+#
+# MS (MeteoSwiss DAV) is now the DEFAULT ground truth for feature
+# selection, fitting, replay, and the normal run, via
+# CategorizedWindCorrectionPipeline._select_ground_truth, which copies
+# ms_* into the internal obs_* working columns by default. A CLI flag
+# (--dssc in wingfoil_predictor.py) opts a run into having that same
+# selection step use dssc_* columns as the ground truth for feature
+# selection / Bayesian Ridge fitting / replay instead of ms_*, for
+# comparing the two observation sources' effect on the model rather
+# than blending them silently. Neither ms_* nor dssc_* should be read
+# directly for feature selection/fitting anywhere else -- obs_* (as
+# selected by _select_ground_truth) is the only name that should touch
+# that code path. DSSC's dssc_* columns remain available for
+# display/comparison regardless of which source is selected for fitting.
+#
+# MeteoSwiss explicitly recommends using their pre-aggregated HOURLY (h)
+# files rather than re-aggregating the 10-minute series by hand: the
+# hourly files can include corrections not present in the raw 10-minute
+# data. This module therefore always fetches the "_h_" (hourly) file, not
+# the "_t_" (10-minute) file.
+#
+# TIMESTAMP CONVENTION -- READ BEFORE TOUCHING THIS SECTION:
+# MeteoSwiss's reference_timestamp for hourly files is the END of the
+# hourly interval, UTC. E.g. "01.09.2026 14:00" is the hour that RAN FROM
+# 13:00 TO 14:00 UTC. DSSC/calibration_db.csv's "hour" column, by
+# contrast, is the START of the hour (see wingfoil_predictor.py's
+# process_dssc_hourly, which buckets raw sub-hourly DSSC readings by the
+# hour they fall within, i.e. "13:00" holds everything from 13:00:00 to
+# 13:59:59). To align MS with DSSC/calibration_db.csv's existing
+# convention, every MS timestamp is shifted back by exactly one hour
+# (interval-end -> interval-start) at parse time in fetch_ms_hourly_data
+# below. Get this wrong and every MS reading will be silently offset by
+# one hour relative to DSSC and the MOSMIX/OpenMeteo forecast columns it's
+# being compared against.
+#
+# TIMEZONE -- SECOND, SEPARATE GOTCHA:
+# The interval-start shift above only fixes the interval convention; it
+# does NOT touch timezone. MeteoSwiss timestamps are UTC (confirmed by
+# MeteoSwiss's own Open Data docs), so after the shift the index is still
+# UTC. But every consumer of fetch_ms_hourly_data's output -- the "hour"
+# column of calibration_db.csv, DSSC's dssc_* (built from a station clock
+# treated as local time in process_dssc_hourly), and MOSMIX/OpenMeteo's
+# df_meteo index (explicitly tz_convert'd to Europe/Zurich in
+# fetch_mosmix_davos_data) -- key their hours in Europe/Zurich LOCAL time,
+# not UTC. Switzerland is UTC+1 (CET) or UTC+2 (CEST), so leaving the MS
+# index in UTC silently shifts every MS observation by 1-2 hours relative
+# to DSSC/MOSMIX when looked up by "HH:00" string, causing MS to appear
+# mostly missing (wrong hours don't match) and the few hours that do
+# coincide to hold the wrong hour's reading. fetch_ms_hourly_data
+# therefore converts the shifted UTC index to Europe/Zurich local time
+# (then drops the tzinfo, since every other index in this toolchain is
+# tz-naive local time) before returning.
+MS_STAC_BASE_URL = "https://data.geo.admin.ch/ch.meteoschweiz.ogd-smn"
+MS_DEFAULT_STATION_ABBR = "DAV"  # Davos -- same site as DSSC/locations.davos
+
+# Column names as confirmed against a live fetch of the MeteoSwiss hourly
+# "recent" file for a Swiss automatic weather station -- stable across
+# stations sharing the same instrumentation generation, but
+# fetch_ms_hourly_data checks for their presence rather than assuming
+# blindly, since a station could in principle expose a different subset.
+MS_COL_WIND_SPEED = "fu3010h0"   # hourly mean wind speed, km/h
+MS_COL_WIND_GUST = "fu3010h1"    # hourly max gust, km/h
+MS_COL_WIND_DIR = "dkl010h0"     # hourly mean wind direction, degrees
+
+
+def fetch_ms_hourly_data(station_abbr=MS_DEFAULT_STATION_ABBR, historical_years=None):
+    """Fetches MeteoSwiss SwissMetNet hourly station data (real
+    observations, not forecast) for the given station abbreviation.
+
+    Always uses the pre-aggregated hourly ("_h_") file per MeteoSwiss's own
+    recommendation (see module-level comment above) -- never re-aggregates
+    from the 10-minute series.
+
+    Returns a DataFrame indexed by INTERVAL-START UTC timestamp (already
+    shifted back one hour from MeteoSwiss's interval-end convention, see
+    module docstring), with columns:
+        ms_speed_kt, ms_gust_kt  -- converted from km/h to knots
+        ms_dir_deg               -- degrees, unchanged
+    or None if the fetch fails entirely.
+
+    `historical_years`: optional list of year-range strings (e.g.
+    ["2020-2023"]) to additionally fetch from the "_h_historical_" archive
+    files, for backfilling dates older than the "recent" file's rolling
+    window. The "recent" file is always fetched and included regardless of
+    this argument.
+    """
+    abbr_lower = station_abbr.lower()
+    frames = []
+
+    recent_url = f"{MS_STAC_BASE_URL}/{abbr_lower}/ogd-smn_{abbr_lower}_h_recent.csv"
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    }
+
+    try:
+        resp = requests.get(recent_url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        frames.append(pd.read_csv(io.StringIO(resp.text), sep=";"))
+    except Exception as e:
+        print(f"⚠️ Warning: could not fetch MS (MeteoSwiss) recent data for "
+              f"station '{station_abbr}': {e}")
+
+    if historical_years:
+        for year_range in historical_years:
+            hist_url = f"{MS_STAC_BASE_URL}/{abbr_lower}/ogd-smn_{abbr_lower}_h_historical_{year_range}.csv"
+            try:
+                resp = requests.get(hist_url, headers=HEADERS, timeout=10)
+                resp.raise_for_status()
+                frames.append(pd.read_csv(io.StringIO(resp.text), sep=";"))
+            except Exception as e:
+                print(f"⚠️ Warning: could not fetch MS historical data "
+                      f"({year_range}) for station '{station_abbr}': {e}")
+
+    if not frames:
+        return None
+
+    df = pd.concat(frames, ignore_index=True)
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    if "reference_timestamp" not in df.columns:
+        print(f"⚠️ Warning: MS data for '{station_abbr}' has no "
+              f"'reference_timestamp' column -- got {list(df.columns)}")
+        return None
+
+    # MeteoSwiss hourly timestamps are typically "DD.MM.YYYY HH:MM" (day-
+    # first). dayfirst=True is REQUIRED here -- without it pandas silently
+    # misparses e.g. "01.09.2026" (1 September) as if month=01, day=09 for
+    # any day <=12, corrupting exactly the ambiguous dates.
+    df["_dt_end"] = pd.to_datetime(df["reference_timestamp"], dayfirst=True, errors="coerce")
+    if df["_dt_end"].isna().mean() > 0.5:
+        # fallback for the compact "YYYYMMDDHHMM" format some MeteoSwiss
+        # exports use instead
+        df["_dt_end"] = pd.to_datetime(df["reference_timestamp"], format="%Y%m%d%H%M", errors="coerce")
+
+    df = df.dropna(subset=["_dt_end"])
+
+    # THE CRITICAL SHIFT: interval-end -> interval-start, see module
+    # docstring. This is what makes MS timestamps directly comparable to
+    # calibration_db.csv's "hour" column and DSSC's dssc_* columns.
+    dt_start_utc = df["_dt_end"] - pd.Timedelta(hours=1)
+
+    # SECOND CRITICAL STEP -- UTC -> Europe/Zurich local, see module
+    # docstring's "TIMEZONE" note. Without this, MS hours are compared
+    # against DSSC/MOSMIX's local-time hour keys while still in UTC,
+    # silently offsetting every MS reading by 1h (CET) or 2h (CEST).
+    df["datetime"] = (
+        dt_start_utc.dt.tz_localize("UTC")
+        .dt.tz_convert("Europe/Zurich")
+        .dt.tz_localize(None)
+    )
+
+    missing = [c for c in (MS_COL_WIND_SPEED, MS_COL_WIND_GUST, MS_COL_WIND_DIR) if c not in df.columns]
+    if missing:
+        print(f"⚠️ Warning: MS data for '{station_abbr}' is missing expected "
+              f"column(s) {missing} -- got {list(df.columns)}. Returning "
+              f"whatever subset is available.")
+
+    out = pd.DataFrame(index=df["datetime"])
+    if MS_COL_WIND_SPEED in df.columns:
+        out["ms_speed_kt"] = convert_kmh_to_knots(df[MS_COL_WIND_SPEED].values)
+    if MS_COL_WIND_GUST in df.columns:
+        out["ms_gust_kt"] = convert_kmh_to_knots(df[MS_COL_WIND_GUST].values)
+    if MS_COL_WIND_DIR in df.columns:
+        out["ms_dir_deg"] = df[MS_COL_WIND_DIR].values
+
+    out = out[~out.index.duplicated(keep="last")].sort_index()
+    return out
+
+
+MS_COL_WIND_SPEED_10MIN = "fu3010z0"  # ten-minute mean wind speed, km/h
+MS_COL_WIND_GUST_10MIN = "fu3010z1"   # ten-minute max gust, km/h
+MS_COL_WIND_DIR_10MIN = "dkl010z0"    # ten-minute mean wind direction, degrees
+
+
+def fetch_ms_now_data(station_abbr=MS_DEFAULT_STATION_ABBR):
+    """Fetches MeteoSwiss SwissMetNet ten-minute ("_t_now_") station data --
+    the same real-observation source as fetch_ms_hourly_data, but at the
+    station's native 10-minute resolution and updated since midnight
+    local time (today only), rather than the pre-aggregated hourly file.
+
+    This exists ONLY to support "today so far": the hourly "_h_recent_"
+    file fetch_ms_hourly_data reads lags behind by up to an hour, so for
+    the CURRENT day's not-yet-complete hour there is no hourly reading
+    yet. The 10-minute "now" file lets a live run compute a same-hour
+    running average and plot the finer-grained curve, without touching
+    how past days or replay work (they still use fetch_ms_hourly_data
+    exclusively).
+
+    Returns a DataFrame indexed by INTERVAL-START UTC-shifted, then
+    Europe/Zurich-local timestamp -- same two-step convention as
+    fetch_ms_hourly_data (interval-end -> interval-start, then UTC ->
+    Europe/Zurich local) -- with columns:
+        ms_speed_kt, ms_gust_kt  -- converted from km/h to knots
+        ms_dir_deg               -- degrees, unchanged
+    or None if the fetch fails entirely.
+    """
+    abbr_lower = station_abbr.lower()
+    now_url = f"{MS_STAC_BASE_URL}/{abbr_lower}/ogd-smn_{abbr_lower}_t_now.csv"
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    }
+
+    try:
+        resp = requests.get(now_url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text), sep=";")
+    except Exception as e:
+        print(f"⚠️ Warning: could not fetch MS (MeteoSwiss) 10-minute 'now' "
+              f"data for station '{station_abbr}': {e}")
+        return None
+
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    if "reference_timestamp" not in df.columns:
+        print(f"⚠️ Warning: MS 'now' data for '{station_abbr}' has no "
+              f"'reference_timestamp' column -- got {list(df.columns)}")
+        return None
+
+    # Same day-first parsing caveat as fetch_ms_hourly_data.
+    df["_dt_end"] = pd.to_datetime(df["reference_timestamp"], dayfirst=True, errors="coerce")
+    if df["_dt_end"].isna().mean() > 0.5:
+        df["_dt_end"] = pd.to_datetime(df["reference_timestamp"], format="%Y%m%d%H%M", errors="coerce")
+
+    df = df.dropna(subset=["_dt_end"])
+
+    # Same interval-end -> interval-start shift as fetch_ms_hourly_data,
+    # scaled to the 10-minute granularity here instead of 1 hour -- see
+    # that function's docstring/module comment for why this shift and
+    # the UTC -> Europe/Zurich conversion below are both required.
+    dt_start_utc = df["_dt_end"] - pd.Timedelta(minutes=10)
+    df["datetime"] = (
+        dt_start_utc.dt.tz_localize("UTC")
+        .dt.tz_convert("Europe/Zurich")
+        .dt.tz_localize(None)
+    )
+
+    missing = [c for c in (MS_COL_WIND_SPEED_10MIN, MS_COL_WIND_GUST_10MIN, MS_COL_WIND_DIR_10MIN) if c not in df.columns]
+    if missing:
+        print(f"⚠️ Warning: MS 'now' data for '{station_abbr}' is missing "
+              f"expected column(s) {missing} -- got {list(df.columns)}. "
+              f"Returning whatever subset is available.")
+
+    out = pd.DataFrame(index=df["datetime"])
+    if MS_COL_WIND_SPEED_10MIN in df.columns:
+        out["ms_speed_kt"] = convert_kmh_to_knots(pd.to_numeric(df[MS_COL_WIND_SPEED_10MIN], errors="coerce").values)
+    if MS_COL_WIND_GUST_10MIN in df.columns:
+        out["ms_gust_kt"] = convert_kmh_to_knots(pd.to_numeric(df[MS_COL_WIND_GUST_10MIN], errors="coerce").values)
+    if MS_COL_WIND_DIR_10MIN in df.columns:
+        out["ms_dir_deg"] = pd.to_numeric(df[MS_COL_WIND_DIR_10MIN], errors="coerce").values
+
+    out = out[~out.index.duplicated(keep="last")].sort_index()
+    return out
+
+
+def compute_ms_hourly_so_far(ms_now_df, target_date):
+    """Builds the SAME {"HH:00": {"speed":..., "gust":..., "dir":...}}
+    shape as get_ms_hourly_for_date, but from the 10-minute "now" series
+    (fetch_ms_now_data) instead of the pre-aggregated hourly file --
+    i.e. a running average over whatever 10-minute samples have arrived
+    so far for each hour, for the CURRENT, not-yet-complete hour.
+
+    Each 10-minute sample already carries the interval-start, Europe/
+    Zurich-local timestamp (see fetch_ms_now_data), so a sample at, say,
+    13:40 belongs to the "13:00" hourly bucket exactly like
+    fetch_ms_hourly_data's own hour-start convention -- "the average is
+    from the data from the coming hour" in the sense that a 10-minute
+    reading whose OWN raw reference_timestamp (interval-end, before the
+    shift) falls at HH:50 is the last sample of hour HH, and a reading
+    at (HH+1):00 is the first sample counted towards the NEXT hour's
+    average, matching fetch_ms_hourly_data's bucketing exactly so the
+    two are directly comparable once the hourly file catches up.
+
+    Wind direction is circular-averaged (same approach as
+    process_dssc_hourly), speed/gust are arithmetic means of the
+    10-minute mean-speed / peak-gust samples collected so far -- an
+    approximation of the true hourly aggregate (which MeteoSwiss
+    computes from the underlying 1-second data, not from the six
+    10-minute values), acceptable here since this is only ever used as a
+    live, provisional stand-in for the current, still-incomplete hour.
+
+    target_date: "YYYY-MM-DD" string.
+    Returns {} if ms_now_df is None or has no rows for that date.
+    """
+    if ms_now_df is None or ms_now_df.empty:
+        return {}
+
+    day_mask = ms_now_df.index.strftime("%Y-%m-%d") == target_date
+    day_df = ms_now_df[day_mask]
+    if day_df.empty:
+        return {}
+
+    result = {}
+    for hour_str, group in day_df.groupby(day_df.index.strftime("%H:00")):
+        speeds = group["ms_speed_kt"].dropna() if "ms_speed_kt" in group else pd.Series(dtype=float)
+        gusts = group["ms_gust_kt"].dropna() if "ms_gust_kt" in group else pd.Series(dtype=float)
+        dirs = group["ms_dir_deg"].dropna() if "ms_dir_deg" in group else pd.Series(dtype=float)
+
+        avg_dir = None
+        if not dirs.empty:
+            sin_sum = np.sin(np.radians(dirs)).sum()
+            cos_sum = np.cos(np.radians(dirs)).sum()
+            R = np.hypot(sin_sum, cos_sum)
+            if R > 1e-5:
+                avg_dir = float(np.degrees(np.arctan2(sin_sum, cos_sum)) % 360)
+
+        result[hour_str] = {
+            "speed": float(speeds.mean()) if not speeds.empty else None,
+            "gust": float(gusts.max()) if not gusts.empty else None,
+            "dir": avg_dir,
+        }
+    return result
+
+
+def get_ms_hourly_for_date(ms_df, target_date):
+    """Slices a fetch_ms_hourly_data() result down to a single date and
+    reshapes it into the same {"HH:00": {"speed":..., "gust":...,
+    "dir":...}} dict shape process_dssc_hourly() produces, so callers
+    (analyze_day, analyze_day_replay, generate_day_graph, ...) can treat
+    ms_hourly exactly like dssc_hourly -- same key format, same per-hour
+    dict shape, same None-for-missing-hour semantics.
+
+    target_date: "YYYY-MM-DD" string.
+    Returns {} if ms_df is None or has no rows for that date.
+    """
+    if ms_df is None or ms_df.empty:
+        return {}
+
+    day_mask = ms_df.index.strftime("%Y-%m-%d") == target_date
+    day_df = ms_df[day_mask]
+    if day_df.empty:
+        return {}
+
+    result = {}
+    for ts, row in day_df.iterrows():
+        hour_str = ts.strftime("%H:00")
+        result[hour_str] = {
+            "speed": row.get("ms_speed_kt") if pd.notna(row.get("ms_speed_kt")) else None,
+            "gust": row.get("ms_gust_kt") if pd.notna(row.get("ms_gust_kt")) else None,
+            "dir": row.get("ms_dir_deg") if pd.notna(row.get("ms_dir_deg")) else None,
+        }
+    return result
 
 
 # =====================================================================

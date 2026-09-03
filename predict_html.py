@@ -55,6 +55,8 @@ from wf_common import (
     kelvin_to_celsius,
     degrees_to_cardinal,
     clean_namespaces,
+    fetch_ms_hourly_data,
+    get_ms_hourly_for_date,
 )
 
 # =====================================================================
@@ -286,7 +288,7 @@ def process_dssc_hourly(wind_data, wind_dir_data, temp_data, target_date):
 # GRAPH GENERATION
 # =====================================================================
 
-def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=None):
+def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=None, ms_obs=None):
     fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
     hours = df_day.index.hour
     
@@ -332,7 +334,12 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
             if v is not None and "speed" in v and v["speed"] is not None
         ]
         if obs_h:
-            ax.scatter(obs_h, obs_sp, color="#2ecc71", label="Obs. Avg. Speed", zorder=5, s=30)
+            # DSSC is now the secondary/comparison observation source
+            # (see MS block below) -- unfilled square marker, same green
+            # speed color, matching wingfoil_predictor.py's
+            # plot_prediction_summary convention.
+            ax.scatter(obs_h, obs_sp, color="#2ecc71", marker="s", facecolors="none",
+                       label="DSSC Obs. Avg. Speed", zorder=5, s=30)
 
         # DSSC Gust Points
         gust_h = [
@@ -346,7 +353,52 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
             if v is not None and v.get("gust") is not None
         ]
         if gust_h:
-            ax.scatter(gust_h, gust_sp, color="#e67e22", marker="2", label="Obs. Gust", zorder=5, s=30)
+            # Unfilled triangle, same orange gust color -- see comment above.
+            ax.scatter(gust_h, gust_sp, color="#e67e22", marker="^", facecolors="none",
+                       label="DSSC Obs. Gust", zorder=5, s=30)
+
+    # MS (MeteoSwiss DAV) observations -- now the default/primary
+    # observation source (matching CategorizedWindCorrectionPipeline's
+    # default ground truth, see _select_ground_truth), displayed by
+    # default alongside the forecast. Uses the SAME colors as DSSC's
+    # speed/gust (green/orange) but FILLED circle/"x" markers -- the
+    # inverse of the styling this dashboard used when DSSC was still the
+    # default source -- so the two series stay visually distinguishable
+    # without introducing a third color that would clash with the
+    # existing speed=green / gust=orange convention used throughout this
+    # dashboard (raw, corrected, and both observation sources all share
+    # that color coding). This matches wingfoil_predictor.py's
+    # plot_prediction_summary exactly: MS = filled o/x, DSSC = unfilled
+    # s/^.
+    ms_sp, ms_gust_sp = [], []
+    if ms_obs:
+        ms_speed_h = [
+            int(k.split(":")[0])
+            for k, v in ms_obs.items()
+            if v is not None and v.get("speed") is not None
+        ]
+        ms_sp = [
+            v["speed"]
+            for k, v in ms_obs.items()
+            if v is not None and v.get("speed") is not None
+        ]
+        if ms_speed_h:
+            ax.scatter(ms_speed_h, ms_sp, color="#2ecc71", marker="o",
+                       label="MS (MeteoSwiss DAV) Speed", zorder=5, s=30)
+
+        ms_gust_h = [
+            int(k.split(":")[0])
+            for k, v in ms_obs.items()
+            if v is not None and v.get("gust") is not None
+        ]
+        ms_gust_sp = [
+            v["gust"]
+            for k, v in ms_obs.items()
+            if v is not None and v.get("gust") is not None
+        ]
+        if ms_gust_h:
+            ax.scatter(ms_gust_h, ms_gust_sp, color="#e67e22", marker="x",
+                       label="MS (MeteoSwiss DAV) Gust", zorder=5, s=30)
 
     ax.axhline(CONFIG["settings"]["wind_threshold_knots"], color="#e74c3c", linestyle=":", alpha=0.7, label="Threshold (10kt)")
     
@@ -356,7 +408,7 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
 
     # Y-axis upper bound: 25kt by default, grown in 5kt increments only
     # when the data actually needs the extra headroom (raw/corrected wind
-    # & gust and DSSC observations -- the ±1 std uncertainty bands are
+    # & gust and DSSC/MS observations -- the ±1 std uncertainty bands are
     # deliberately NOT considered here, so a wide-but-low-confidence band
     # doesn't by itself push the axis taller), rather than clipping tall
     # days at a fixed 25kt ceiling.
@@ -372,6 +424,10 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
         candidate_maxes.append(max(obs_sp))
     if gust_sp:
         candidate_maxes.append(max(gust_sp))
+    if ms_sp:
+        candidate_maxes.append(max(ms_sp))
+    if ms_gust_sp:
+        candidate_maxes.append(max(ms_gust_sp))
 
     candidate_maxes = [v for v in candidate_maxes if pd.notna(v)]
     data_max = max(candidate_maxes) if candidate_maxes else 0.0
@@ -481,11 +537,14 @@ def generate_mobile_html(days_data, output_file="index.html"):
                     <th>Rain Prob (%)</th>
                     <th>Weather</th>
                     <th>Foehn Grad (hPa)</th>
+                    <th>MS Spd (kt)</th>
+                    <th>MS Dir</th>
                     <th>Regime</th>
                 </tr>
             </thead>
             <tbody>
 """
+        ms_hourly = data.get("ms") or {}
         for ts, row in data["df"].iterrows():
             if 10 <= ts.hour <= 19:
                 raw_ff = f"{row['mosmix_ff_kt']:.1f}" if pd.notna(row.get('mosmix_ff_kt')) else "-"
@@ -498,6 +557,14 @@ def generate_mobile_html(days_data, output_file="index.html"):
                 rain = f"{row['om_prec_prob']:.0f}%" if pd.notna(row.get('om_prec_prob')) else "-"
                 wcode_label = describe_weather_code(row.get('om_w_codes'))
                 foehn_grad = f"{row['mosmix_dp_foehn']:.1f}" if pd.notna(row.get('mosmix_dp_foehn')) else "-"
+
+                # MS (MeteoSwiss DAV) -- looked up by hour string from the
+                # per-day dict built by get_ms_hourly_for_date, same
+                # "HH:00" key convention used throughout (see analyze_day
+                # in wingfoil_predictor.py for the equivalent DSSC lookup).
+                ms_hour_obs = ms_hourly.get(ts.strftime("%H:00"))
+                ms_speed = f"{ms_hour_obs['speed']:.1f}" if ms_hour_obs and ms_hour_obs.get('speed') is not None else "-"
+                ms_dir = degrees_to_cardinal(ms_hour_obs.get('dir')) if ms_hour_obs and ms_hour_obs.get('dir') is not None else "-"
                 
                 html_content += f"""
                 <tr>
@@ -512,6 +579,8 @@ def generate_mobile_html(days_data, output_file="index.html"):
                     <td>{rain}</td>
                     <td>{wcode_label}</td>
                     <td>{foehn_grad}</td>
+                    <td>{ms_speed}</td>
+                    <td>{ms_dir}</td>
                     <td>{row.get('classification', '-')}</td>
                 </tr>"""
 
@@ -548,10 +617,12 @@ def main():
         print("📡 DSSC Realtime Observations: ENABLED")
     else:
         print("📡 DSSC Realtime Observations: DISABLED")
+    print("🇨🇭 MS (MeteoSwiss DAV) Observations: ENABLED (always on, default observation source; see --include-dssc for the secondary DSSC source)")
 
     station_id = CONFIG["locations"]["davos"]["station_id"]
     lat = CONFIG["locations"]["davos"]["lat"]
     lon = CONFIG["locations"]["davos"]["lon"]
+    ms_station_abbr = CONFIG["locations"]["davos"].get("ms_station_abbr", "DAV")
 
     tz_name = CONFIG["settings"]["timezone"]
     today = datetime.now(ZoneInfo(tz_name))
@@ -613,6 +684,23 @@ def main():
     df_predicted = pipeline.process(df_combined)
 
     days_data = {}
+
+    # MS (MeteoSwiss DAV) -- default observation source for the same site
+    # as DSSC (see CategorizedWindCorrectionPipeline._select_ground_truth
+    # for the equivalent default in the fitting pipeline). Always on
+    # (unlike DSSC's --include-dssc opt-in). Fetched ONCE here, outside
+    # the per-day loop below, and sliced per day via
+    # get_ms_hourly_for_date -- unlike the pre-existing DSSC fetch, which
+    # re-fetches on every loop iteration when --include-dssc is set. That
+    # DSSC behavior is left as-is (out of scope for this change) but
+    # there's no reason to repeat the same inefficiency for MS.
+    print(f"📥 Récupération des observations MS (MeteoSwiss, station {ms_station_abbr})...")
+    ms_df = fetch_ms_hourly_data(station_abbr=ms_station_abbr)
+    if ms_df is None or ms_df.empty:
+        print("⚠️ Warning: MS data unavailable -- graphs/table will show no "
+              "observations for this run unless --include-dssc is set "
+              "(MS columns will be blank).")
+
     for i, d_str in enumerate(dates):
         df_day = df_predicted[df_predicted.index.strftime("%Y-%m-%d") == d_str]
         if not df_day.empty:
@@ -623,11 +711,14 @@ def main():
                 dssc_temp = fetch_dssc_data("tempdata")
                 dssc_hourly = process_dssc_hourly(dssc_wind, dssc_wind_dir, dssc_temp, d_str)
 
+            ms_hourly = get_ms_hourly_for_date(ms_df, d_str)
+
             graph_name = img_names[i]
-            generate_day_graph(d_str, df_day, dssc_hourly, graph_name, build_time_str=build_time_str)
+            generate_day_graph(d_str, df_day, dssc_hourly, graph_name, build_time_str=build_time_str, ms_obs=ms_hourly)
             days_data[d_str] = {
                 "df": df_day,
                 "dssc": dssc_hourly,
+                "ms": ms_hourly,
                 "graph_name": graph_name
             }
 

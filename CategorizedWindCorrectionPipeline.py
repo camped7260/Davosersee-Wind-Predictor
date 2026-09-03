@@ -36,10 +36,22 @@ class CategorizedWindCorrectionPipeline:
     
     Trained strictly on historical operational hours (11:00 - 17:00).
     """
-    def __init__(self, db_filepath="calibration_db.csv", min_samples_for_ridge=10, verbose_summary=False):
+    def __init__(self, db_filepath="calibration_db.csv", min_samples_for_ridge=10, verbose_summary=False, use_dssc_for_fit=False):
         self.db_filepath = db_filepath
         self.min_samples_for_ridge = min_samples_for_ridge
         self.verbose_summary = verbose_summary
+
+        # When True, fit_from_database() trains against DSSC's
+        # dssc_speed/dssc_gust/dssc_dir_deg/dssc_temp_c observations
+        # instead of MS (MeteoSwiss DAV station) -- see
+        # _select_ground_truth. Default False: MS (MeteoSwiss DAV) is now
+        # the toolchain's default ground truth for feature selection,
+        # fitting, replay, and the normal run, since it's the
+        # independently-operated, better-maintained station. A caller
+        # opts into DSSC instead via wingfoil_predictor.py's --dssc CLI
+        # flag, which applies to --analyze, --replay, --export_model, and
+        # the normal run alike.
+        self.use_dssc_for_fit = use_dssc_for_fit
         
         config = load_config()
         self.op_window = config["settings"].get("operational_window_utc", [11, 17])
@@ -756,6 +768,105 @@ class CategorizedWindCorrectionPipeline:
 
         print("=" * 80 + "\n")
 
+    def _select_ground_truth(self, df):
+        """Populates the internal "obs_*" ground-truth working columns
+        (obs_speed/obs_gust/obs_dir_deg/obs_temp_c) that every downstream
+        line of fit_from_database / _flag_unforecasted_collapses /
+        _prepare_features -- and every analysis/replay routine in
+        wingfoil_predictor.py -- already reference.
+
+        obs_* is NOT a raw calibration_db.csv column. calibration_db.csv
+        only ever stores raw observation sources by their own name:
+        dssc_speed/dssc_gust/dssc_dir_deg/dssc_temp_c (DSSC, a secondary
+        station) and ms_speed/ms_gust/ms_dir_deg (MS/MeteoSwiss DAV, the
+        primary station at the same site). obs_* is this class's derived,
+        source-agnostic name for "whichever one was selected as ground
+        truth for this run" -- selection happens here, exactly once, so
+        nothing downstream needs to know or care whether it's looking at
+        MS or DSSC:
+
+        1. DEFAULT (always applied first): ms_speed/ms_gust/ms_dir_deg
+           are copied into obs_speed/obs_gust/obs_dir_deg. MS
+           (MeteoSwiss DAV) is now the toolchain's primary ground truth,
+           so this step alone is what an ordinary run (use_dssc_for_fit
+           =False) ends up using. ms_* has no temperature equivalent, so
+           obs_temp_c always comes from DSSC's dssc_temp_c regardless of
+           use_dssc_for_fit.
+        2. OPTIONAL OVERRIDE: if self.use_dssc_for_fit is True, step 1's
+           speed/gust/direction result is overwritten by DSSC's
+           dssc_speed/dssc_gust/dssc_dir_deg equivalents (see below) -- a
+           swap, not a merge/average: comparing "the model fit on MS"
+           against "the model fit on DSSC" is only a clean comparison if
+           each run uses exactly one ground truth throughout, not some
+           blended combination that would be harder to reason about and
+           impossible to attribute a result to one station or the other.
+
+        Callers must call this BEFORE any feature selection, delta
+        computation, or fitting that touches obs_* -- never read
+        ms_*/dssc_* directly for that purpose, or a caller could
+        accidentally reintroduce an MS/DSSC blend that this single
+        selection point exists to prevent.
+        """
+        df = df.copy()
+
+        dssc_temp_to_obs = {"dssc_temp_c": "obs_temp_c"}
+        missing_dssc_temp_cols = [c for c in dssc_temp_to_obs if c not in df.columns]
+        if missing_dssc_temp_cols:
+            raise ValueError(
+                f"calibration_db.csv is missing DSSC ground-truth column(s) "
+                f"{missing_dssc_temp_cols}. calibration_db.csv stores DSSC's "
+                f"raw readings as dssc_speed/dssc_gust/dssc_dir_deg/"
+                f"dssc_temp_c (obs_* was retired as a stored column name -- "
+                f"obs_* is now purely the internal, selected-ground-truth "
+                f"name produced by _select_ground_truth). If this is an old "
+                f"calibration_db.csv still using obs_* headers, rename them "
+                f"to dssc_*/ms_* before loading it."
+            )
+        for dssc_col, obs_col in dssc_temp_to_obs.items():
+            df[obs_col] = df[dssc_col]
+
+        ms_to_obs = {
+            "ms_speed": "obs_speed",
+            "ms_gust": "obs_gust",
+            "ms_dir_deg": "obs_dir_deg",
+        }
+        dssc_to_obs = {
+            "dssc_speed": "obs_speed",
+            "dssc_gust": "obs_gust",
+            "dssc_dir_deg": "obs_dir_deg",
+        }
+        missing_ms_cols = [c for c in ms_to_obs if c not in df.columns]
+        if missing_ms_cols:
+            raise ValueError(
+                f"calibration_db.csv is missing MS ground-truth column(s) "
+                f"{missing_ms_cols}. calibration_db.csv stores MS's raw "
+                f"readings as ms_speed/ms_gust/ms_dir_deg (obs_* was "
+                f"retired as a stored column name -- obs_* is now purely "
+                f"the internal, selected-ground-truth name produced by "
+                f"_select_ground_truth). If this is an old calibration_db.csv "
+                f"still using obs_* headers, rename them to dssc_*/ms_* "
+                f"before loading it."
+            )
+        for ms_col, obs_col in ms_to_obs.items():
+            df[obs_col] = df[ms_col]
+
+        if not self.use_dssc_for_fit:
+            return df
+
+        missing_dssc_cols = [c for c in dssc_to_obs if c not in df.columns]
+        if missing_dssc_cols:
+            print(f"⚠️ Warning: --dssc was requested but calibration_db.csv "
+                  f"is missing column(s) {missing_dssc_cols} -- falling back "
+                  f"to MS (ms_speed/ms_gust/ms_dir_deg) since DSSC data "
+                  f"isn't available to fit against.")
+            return df
+
+        print("🏔️ --dssc: training against DSSC observations instead of "
+              "MS (MeteoSwiss DAV) for this run.")
+        for dssc_col, obs_col in dssc_to_obs.items():
+            df[obs_col] = df[dssc_col]
+        return df
+
     def fit_from_database(self):
         """Trains category-specific Bayesian models using calibration logs (11:00 - 17:00)."""
         try:
@@ -763,6 +874,7 @@ class CategorizedWindCorrectionPipeline:
                 return
 
             df_db = pd.read_csv(self.db_filepath)
+            df_db = self._select_ground_truth(df_db)
             df_db = df_db.dropna(subset=["mosmix_ff_kt", "obs_speed"]).copy()
             if df_db.empty:
                 return
@@ -1230,7 +1342,7 @@ class CategorizedWindCorrectionPipeline:
         export_time_str = now_local.strftime("%Y-%m-%d %H:%M:%S %Z")
 
         export_data = {
-            "version": "MOSMIX_V23",
+            "version": "MOSMIX_V25",
             "updated_at": export_time_str,
             "global_fallback_bias": self.global_fallback_bias,
             "global_std_bias": self.global_std_bias,
