@@ -45,7 +45,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python predict_html.py --include-dssc
+          #python predict_html.py --include-dssc
+          python predict_html.py
 
       - name: Organize build artifacts
         shell: bash
