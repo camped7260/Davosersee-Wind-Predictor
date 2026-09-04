@@ -1,18 +1,18 @@
 {
     "category_feature_sets": {
         "Sunny": [
-            "mosmix_u_kt",
+            "mosmix_tt_c",
             "daylight_frac_elapsed",
-            "mosmix_tt_c"
+            "mosmix_v_kt"
         ],
         "Sudfoehn + Sunny": [
             "mosmix_ff_kt",
             "mosmix_rad_kj",
-            "om_wind_speed_700hPa_kt"
+            "momentum_conc"
         ],
         "NordFoehn + PartlyCloudy": [
-            "om_bl_height",
-            "daylight_frac_elapsed"
+            "daylight_frac_elapsed",
+            "om_bl_height"
         ],
         "PartlyCloudy": [
             "daylight_frac_elapsed",
@@ -31,7 +31,7 @@
     "category_fx1_feature_sets": {
         "Sunny": [
             "daylight_frac_elapsed",
-            "mosmix_u_kt",
+            "mosmix_v_kt",
             "mosmix_tt_c"
         ],
         "Sudfoehn + Sunny": [
@@ -45,7 +45,7 @@
         ],
         "PartlyCloudy": [
             "daylight_frac_elapsed",
-            "om_wind_speed_700hPa_kt"
+            "momentum_conc"
         ],
         "Sudfoehn + PartlyCloudy": [
             "mosmix_ff_kt"

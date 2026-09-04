@@ -436,12 +436,15 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
     # days at a fixed 25kt ceiling.
     DEFAULT_Y_MAX = 25
     Y_STEP = 5.0
+    
+    mask = (hours >= 10) & (hours <= 19)
     candidate_maxes = [
-        df_day["mosmix_ff_kt"].max(skipna=True),
-        df_day["mosmix_fx1_kt"].max(skipna=True),
-        corr_ff.max(skipna=True),
-        corr_fx.max(skipna=True),
+        df_day.loc[mask, "mosmix_ff_kt"].max(skipna=True),
+        df_day.loc[mask, "mosmix_fx1_kt"].max(skipna=True),
+        corr_ff[mask].max(skipna=True),
+        corr_fx[mask].max(skipna=True),
     ]
+    print(f"candidate_maxes {candidate_maxes}")
     if obs_sp:
         candidate_maxes.append(max(obs_sp))
     if gust_sp:

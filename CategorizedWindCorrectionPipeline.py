@@ -645,6 +645,33 @@ class CategorizedWindCorrectionPipeline:
             df[f"{name}"] = (df["om_bl_height"] >= height).astype(float)
             if name not in ENGINEERED_FEATURES:
                 ENGINEERED_FEATURES.append(name)
+
+        # Momentum-concentration ratio: 700hPa wind speed divided by boundary-
+        # layer depth. Physical story (see the Sunny-regime calibration_db.csv
+        # analysis this was derived from): raw om_bl_height on its own is
+        # confounded with mosmix_tt_c (corr ~0.63 in the Sunny slice -- a
+        # shallow layer mostly just means "cooler day"), and doesn't
+        # distinguish "shallow with strong flow aloft to concentrate" from
+        # "shallow with nothing up there to concentrate". Dividing by
+        # om_bl_height isolates that: same momentum aloft, thinner layer to
+        # spread it through => stronger surface wind. In the Sunny regime
+        # this beat raw om_bl_height on both raw correlation with obs_speed
+        # (+0.51 vs +0.32/-0.32 depending on sign convention) and on the
+        # residual left after the existing Sunny features (+0.29 vs +0.22),
+        # so it's a genuine improvement there rather than a relabeling.
+        # Weak/inconsistent-sign elsewhere (PartlyCloudy, Sudfoehn+PartlyCloudy)
+        # at N=13-35 -- not validated for those regimes, only add it to a
+        # category's feature set on its own supporting analysis, not by
+        # default alongside om_bl_height.
+        #
+        # om_bl_height is occasionally 0 or NaN (calm/missing-data hours);
+        # guard against inf/-inf from divide-by-zero rather than let a
+        # single bad row poison the fit.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            df["momentum_conc"] = df["om_wind_speed_700hPa_kt"] / df["om_bl_height"]
+        df["momentum_conc"] = df["momentum_conc"].replace([np.inf, -np.inf], np.nan)
+        if "momentum_conc" not in ENGINEERED_FEATURES:
+            ENGINEERED_FEATURES.append("momentum_conc")
         
         # Generate a list of features from om_wind_speed_10m and om_wind_direction_10m for different angles 
         angles = [] # V20: currently swicthed off, it doesn't seem to bring too much
