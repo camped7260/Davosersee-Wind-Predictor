@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt
 
 from foehn_gradient import get_combined_data_foehn_gradient
 from CategorizedWindCorrectionPipeline import CategorizedWindCorrectionPipeline
+from ecowitt import get_ecowitt_data, extract_weather_timeseries
 
 # Config loading, unit conversions, WMO code descriptions, and display
 # constants (REGIME_COLORS etc.) come from wf_common.py -- the same shared
@@ -51,7 +52,6 @@ from wf_common import (
     describe_weather_code,
     load_config,
     convert_ms_to_knots,
-    convert_kmh_to_knots,
     kelvin_to_celsius,
     degrees_to_cardinal,
     clean_namespaces,
@@ -222,49 +222,112 @@ def fetch_openmeteo(lat, lon, start_date, end_date):
 # =====================================================================
 # FETCH & PROCESS DSSC DATA
 # =====================================================================
-def fetch_dssc_data(endpoint_name):
-    url = f"https://www.dssc.ch/cumulusmx/{endpoint_name}.json"
-    headers = {'User-Agent': 'Mozilla/5.0 (Ubuntu; Linux x86_64) WingfoilPredictor/1.0'}
-    try:
-        res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            return res.json()
-    except Exception as e:
-        print(f"[⚠️ Warning] Station DSSC ({endpoint_name}) indisponible : {e}")
-    return None
+# DSSC's old Cumulus MX endpoint (dssc.ch/cumulusmx/*.json) was
+# deactivated. DSSC's station is now published as a shared Ecowitt
+# device, so fetching/parsing it reuses ecowitt.py's get_ecowitt_data()
+# and extract_weather_timeseries() directly -- exactly like
+# wingfoil_predictor.py's own fetch_dssc_data/process_dssc_hourly, so
+# both scripts read DSSC the same way instead of predict_html.py
+# quietly hitting a dead endpoint and always showing no DSSC data.
+#
+# IMPORTANT: cross-checked against ground-truth readings on 2026-09-05
+# (a real 7.2/8.8 m/s observation at 08:10 came back as raw "7.2"/"8.8")
+# -- for THIS device, the windspeedmph/windgustmph fields returned by
+# get_data are actually m/s, and tempf is actually °C, despite the field
+# names. ecowitt.py's extract_weather_timeseries() now converts speed
+# from m/s to the requested speed_unit and passes temp through as-is, so
+# DSSC just calls it with speed_unit="knots". If DSSC's account settings
+# ever change again, re-run the ground-truth cross-check before assuming
+# otherwise.
+DSSC_DEFAULT_DEVICE_ID = "Mzk5bHJCSWxMREpWTEFtKzhoQ1lPUT09"
+DSSC_DEFAULT_AUTHORIZE = "8E98BV"
 
-def process_dssc_hourly(wind_data, wind_dir_data, temp_data, target_date):
+_dssc_session = None
+
+
+def _get_dssc_session():
+    """Lazily creates/reuses a requests.Session with cookies initialised
+    against DSSC's ecowitt.net share page, mirroring ecowitt.py's own
+    session.get(init_url) warm-up in main() before calling get_ecowitt_data."""
+    global _dssc_session
+    if _dssc_session is None:
+        _dssc_session = requests.Session()
+        init_url = (
+            f"https://www.ecowitt.net/home/share"
+            f"?authorize={DSSC_DEFAULT_AUTHORIZE}&device_id={DSSC_DEFAULT_DEVICE_ID}"
+        )
+        init_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
+            )
+        }
+        try:
+            _dssc_session.get(init_url, headers=init_headers, timeout=10)
+        except Exception as e:
+            print(f"[⚠️ Warning] Station DSSC (init session) indisponible : {e}")
+    return _dssc_session
+
+
+def fetch_dssc_data(target_date):
+    """Fetches one day of DSSC observations via ecowitt.py's own
+    get_ecowitt_data(), for DSSC_DEFAULT_DEVICE_ID/DSSC_DEFAULT_AUTHORIZE.
+
+    target_date: 'YYYY-MM-DD' string. Returns the raw JSON dict from
+    ecowitt.net, or None on failure -- get_ecowitt_data already prints
+    its own warning and returns None on request errors, so callers
+    degrade the same way a Cumulus MX outage used to (an empty/None
+    dssc_hourly, not a crash).
+    """
+    session = _get_dssc_session()
+    return get_ecowitt_data(session, target_date, DSSC_DEFAULT_DEVICE_ID, DSSC_DEFAULT_AUTHORIZE)
+
+
+def process_dssc_hourly(json_data, target_date):
+    """Buckets one day's DSSC payload (as returned by fetch_dssc_data)
+    into per-hour speed/gust/dir/temp observations -- same
+    {'HH:00': {...} | None} shape the old Cumulus MX-based version
+    produced, so every downstream caller (generate_day_graph,
+    generate_mobile_html, ...) is unaffected by the API swap.
+
+    Wind/temperature parsing itself is entirely ecowitt.py's
+    extract_weather_timeseries() -- speed_unit="knots" converts the
+    device's native m/s readings to knots, temp is used as-is in °C
+    (see note above DSSC_DEFAULT_DEVICE_ID). This function only adds
+    DSSC's own concerns on top: filtering to target_date, bucketing by
+    hour, and circular-averaging direction.
+    """
     hourly_raw = {f"{h:02d}:00": {"speeds": [], "gusts": [], "dirs": [], "temps": []} for h in range(0, 24)}
-    
-    if wind_data:
-        for timestamp, val_kmh in wind_data.get("wspeed", []):
-            dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
-            time_str = dt.strftime("%H:00")
-            if dt.strftime("%Y-%m-%d") == target_date and time_str in hourly_raw:
-                hourly_raw[time_str]["speeds"].append(val_kmh)
-                
-        for timestamp, val_kmh in wind_data.get("wgust", []):
-            dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
-            time_str = dt.strftime("%H:00")
-            if dt.strftime("%Y-%m-%d") == target_date and time_str in hourly_raw:
-                hourly_raw[time_str]["gusts"].append(val_kmh)
 
-    if wind_dir_data:
-        for timestamp, val_deg in wind_dir_data.get("avgbearing", []):
-            dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
-            time_str = dt.strftime("%H:00")
-            if dt.strftime("%Y-%m-%d") == target_date and time_str in hourly_raw:
-                hourly_raw[time_str]["dirs"].append(val_deg)
+    times, speeds, gusts, dirs, temps = extract_weather_timeseries(json_data, speed_unit="knots")
 
-    if temp_data:
-        temp_key = "temp" if "temp" in temp_data else next(iter(temp_data.keys()), None)
-        if temp_key and isinstance(temp_data.get(temp_key), list):
-            for timestamp, val_c in temp_data[temp_key]:
-                dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
-                time_str = dt.strftime("%H:00")
-                if dt.strftime("%Y-%m-%d") == target_date and time_str in hourly_raw:
-                    hourly_raw[time_str]["temps"].append(val_c)
-                 
+    for i, time_val in enumerate(times):
+        try:
+            if str(time_val).isdigit():
+                dt = datetime.fromtimestamp(int(time_val), tz=timezone.utc).astimezone(ZoneInfo("Europe/Zurich")).replace(tzinfo=None)
+            else:
+                dt = datetime.strptime(str(time_val), "%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            continue
+
+        if dt.strftime("%Y-%m-%d") != target_date:
+            continue
+        time_str = dt.strftime("%H:00")
+        if time_str not in hourly_raw:
+            continue
+
+        # extract_weather_timeseries() now returns None (not 0.0) for
+        # any sample it couldn't parse -- skip those instead of feeding
+        # None into the sum()/max() averaging below.
+        if i < len(speeds) and speeds[i] is not None:
+            hourly_raw[time_str]["speeds"].append(speeds[i])
+        if i < len(gusts) and gusts[i] is not None:
+            hourly_raw[time_str]["gusts"].append(gusts[i])
+        if i < len(dirs) and dirs[i] is not None:
+            hourly_raw[time_str]["dirs"].append(dirs[i])
+        if i < len(temps) and temps[i] is not None:
+            hourly_raw[time_str]["temps"].append(temps[i])
+
     hourly_obs = {}
     for hour, data in hourly_raw.items():
         if data["speeds"] or data["temps"] or data["dirs"]:
@@ -277,8 +340,8 @@ def process_dssc_hourly(wind_data, wind_dir_data, temp_data, target_date):
                     avg_dir = float(np.degrees(np.arctan2(sin_sum, cos_sum)) % 360)
 
             hourly_obs[hour] = {
-                "speed": convert_kmh_to_knots(sum(data["speeds"]) / len(data["speeds"])) if data["speeds"] else None,
-                "gust": convert_kmh_to_knots(max(data["gusts"])) if data["gusts"] else (convert_kmh_to_knots(max(data["speeds"])) if data["speeds"] else None),
+                "speed": (sum(data["speeds"]) / len(data["speeds"])) if data["speeds"] else None,
+                "gust": max(data["gusts"]) if data["gusts"] else (max(data["speeds"]) if data["speeds"] else None),
                 "dir": avg_dir,
                 "temp": sum(data["temps"]) / len(data["temps"]) if data["temps"] else None
             }
@@ -286,12 +349,70 @@ def process_dssc_hourly(wind_data, wind_dir_data, temp_data, target_date):
             hourly_obs[hour] = None
     return hourly_obs
 
+
+def build_dssc_now_df(json_data, target_date):
+    """Builds a live 10-minute-resolution DataFrame (index = Europe/
+    Zurich-local timestamp, columns dssc_speed_kt/dssc_gust_kt) from
+    DSSC's own raw ecowitt payload -- i.e. the native ~10-minute-
+    resolution points, not the hourly buckets process_dssc_hourly
+    produces. Mirrors wingfoil_predictor.py's build_dssc_now_df/
+    wf_common.fetch_ms_now_data shape, so generate_day_graph's live-
+    curve block can treat either source interchangeably.
+
+    Unlike MS, DSSC has no separate "hourly" vs "now" endpoint: the one
+    ecowitt.net payload (json_data, from fetch_dssc_data) already carries
+    the day's raw 10-minute samples, so this just reshapes it into a
+    DataFrame sliced to target_date.
+
+    Returns an empty DataFrame (not None) if there is nothing usable, so
+    callers can use the same `.empty` check as ms_now_df.
+    """
+    times, speeds, gusts, dirs, _temps = extract_weather_timeseries(json_data, speed_unit="knots")
+
+    rows = []
+    for i, time_val in enumerate(times):
+        try:
+            if str(time_val).isdigit():
+                dt = datetime.fromtimestamp(int(time_val), tz=timezone.utc).astimezone(ZoneInfo("Europe/Zurich")).replace(tzinfo=None)
+            else:
+                dt = datetime.strptime(str(time_val), "%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            continue
+
+        if dt.strftime("%Y-%m-%d") != target_date:
+            continue
+
+        # None (missing/unparseable) maps to NaN here -- this is the
+        # DataFrame boundary, and NaN is what lets the downstream plot
+        # show a gap instead of dropping to zero.
+        speed_val = speeds[i] if i < len(speeds) else None
+        gust_val = gusts[i] if i < len(gusts) else None
+        rows.append({
+            "datetime": dt,
+            "dssc_speed_kt": speed_val if speed_val is not None else np.nan,
+            "dssc_gust_kt": gust_val if gust_val is not None else np.nan,
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows).set_index("datetime").sort_index()
+    df = df[~df.index.duplicated(keep="last")]
+    return df
+
 # =====================================================================
 # GRAPH GENERATION
 # =====================================================================
 
-def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=None, ms_obs=None,
-                        ms_now_hours=None, ms_now_speed=None, ms_now_gust=None):
+def generate_day_graph(date_str, df_day, output_path, build_time_str=None, obs_hourly=None,
+                        obs_label="MS", now_hours=None, now_speed=None, now_gust=None):
+    """Renders one day's forecast graph, with hourly speed/gust observation
+    markers from a SINGLE source (obs_label: "MS" or "DSSC" -- see main()'s
+    --dssc handling), plus that same source's live 10-minute curve for
+    today if provided. Unlike the old overlay version, this never mixes
+    MS and DSSC observations on one plot -- each run (plain or --dssc)
+    only ever has one ground-truth source in scope, matching
+    wingfoil_predictor.py's plot_prediction_summary."""
     fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
     hours = df_day.index.hour
     
@@ -324,101 +445,55 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
             color="#e67e22", alpha=0.15, zorder=1
         )
 
-    obs_sp, gust_sp = [], []
-    if dssc_obs:
-        obs_h = [
-            int(k.split(":")[0]) 
-            for k, v in dssc_obs.items() 
-            if v is not None and "speed" in v and v["speed"] is not None
+    # Hourly observations -- the single active source (MS or DSSC),
+    # filled circle/x markers (no more filled-vs-unfilled distinction
+    # since only one source is ever shown on a given graph now).
+    obs_sp, obs_gust_sp = [], []
+    if obs_hourly:
+        obs_speed_h = [
+            int(k.split(":")[0])
+            for k, v in obs_hourly.items()
+            if v is not None and v.get("speed") is not None
         ]
         obs_sp = [
-            v["speed"] 
-            for k, v in dssc_obs.items() 
-            if v is not None and "speed" in v and v["speed"] is not None
-        ]
-        if obs_h:
-            # DSSC is now the secondary/comparison observation source
-            # (see MS block below) -- unfilled square marker, same green
-            # speed color, matching wingfoil_predictor.py's
-            # plot_prediction_summary convention.
-            ax.scatter(obs_h, obs_sp, color="#2ecc71", marker="s", facecolors="none",
-                       label="DSSC Obs. Avg. Speed", zorder=5, s=30)
-
-        # DSSC Gust Points
-        gust_h = [
-            int(k.split(":")[0]) 
-            for k, v in dssc_obs.items() 
-            if v is not None and v.get("gust") is not None
-        ]
-        gust_sp = [
-            v["gust"] 
-            for k, v in dssc_obs.items() 
-            if v is not None and v.get("gust") is not None
-        ]
-        if gust_h:
-            # Unfilled triangle, same orange gust color -- see comment above.
-            ax.scatter(gust_h, gust_sp, color="#e67e22", marker="^", facecolors="none",
-                       label="DSSC Obs. Gust", zorder=5, s=30)
-
-    # MS (MeteoSwiss DAV) observations -- now the default/primary
-    # observation source (matching CategorizedWindCorrectionPipeline's
-    # default ground truth, see _select_ground_truth), displayed by
-    # default alongside the forecast. Uses the SAME colors as DSSC's
-    # speed/gust (green/orange) but FILLED circle/"x" markers -- the
-    # inverse of the styling this dashboard used when DSSC was still the
-    # default source -- so the two series stay visually distinguishable
-    # without introducing a third color that would clash with the
-    # existing speed=green / gust=orange convention used throughout this
-    # dashboard (raw, corrected, and both observation sources all share
-    # that color coding). This matches wingfoil_predictor.py's
-    # plot_prediction_summary exactly: MS = filled o/x, DSSC = unfilled
-    # s/^.
-    ms_sp, ms_gust_sp = [], []
-    if ms_obs:
-        ms_speed_h = [
-            int(k.split(":")[0])
-            for k, v in ms_obs.items()
-            if v is not None and v.get("speed") is not None
-        ]
-        ms_sp = [
             v["speed"]
-            for k, v in ms_obs.items()
+            for k, v in obs_hourly.items()
             if v is not None and v.get("speed") is not None
         ]
-        if ms_speed_h:
-            ax.scatter(ms_speed_h, ms_sp, color="#2ecc71", marker="o",
-                       label="MS Speed", zorder=5, s=30)
+        if obs_speed_h:
+            ax.scatter(obs_speed_h, obs_sp, color="#2ecc71", marker="o",
+                       label=f"{obs_label} Speed", zorder=5, s=30)
 
-        ms_gust_h = [
+        obs_gust_h = [
             int(k.split(":")[0])
-            for k, v in ms_obs.items()
+            for k, v in obs_hourly.items()
             if v is not None and v.get("gust") is not None
         ]
-        ms_gust_sp = [
+        obs_gust_sp = [
             v["gust"]
-            for k, v in ms_obs.items()
+            for k, v in obs_hourly.items()
             if v is not None and v.get("gust") is not None
         ]
-        if ms_gust_h:
-            ax.scatter(ms_gust_h, ms_gust_sp, color="#e67e22", marker="x",
-                       label="MS Gust", zorder=5, s=30)
+        if obs_gust_h:
+            ax.scatter(obs_gust_h, obs_gust_sp, color="#e67e22", marker="x",
+                       label=f"{obs_label} Gust", zorder=5, s=30)
 
-    # MS 10-minute "now" curve -- only ever populated for the current day
-    # (see main()'s ms_now_df handling, mirroring wingfoil_predictor.py's
-    # analyze_day / plot_prediction_summary). Drawn as thin, semi-
-    # transparent lines (not scatter) at the same MS green/orange colors
-    # so it reads as the fine-grained trace behind the same-colored
-    # hourly MS markers above, rather than a third, competing series.
-    if ms_now_hours is not None and ms_now_speed is not None and pd.Series(ms_now_speed).notna().any():
+    # Live 10-minute "now" curve -- only ever populated for the current
+    # day (see main()'s now_df handling), for whichever source
+    # (MS/DSSC) this graph is showing. Drawn as thin, semi-transparent
+    # lines (not scatter) at the same green/orange colors so it reads as
+    # the fine-grained trace behind the same-colored hourly markers
+    # above, rather than a third, competing series.
+    if now_hours is not None and now_speed is not None and pd.Series(now_speed).notna().any():
         ax.plot(
-            ms_now_hours, ms_now_speed,
-            label="MS 10min Sp.", color="#2ecc71",
+            now_hours, now_speed,
+            label=f"{obs_label} 10min Sp.", color="#2ecc71",
             linewidth=1.0, alpha=0.5, zorder=4
         )
-    if ms_now_hours is not None and ms_now_gust is not None and pd.Series(ms_now_gust).notna().any():
+    if now_hours is not None and now_gust is not None and pd.Series(now_gust).notna().any():
         ax.plot(
-            ms_now_hours, ms_now_gust,
-            label="MS 10min Gust", color="#e67e22",
+            now_hours, now_gust,
+            label=f"{obs_label} 10min Gust", color="#e67e22",
             linewidth=1.0, alpha=0.5, zorder=4
         )
 
@@ -430,10 +505,10 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
 
     # Y-axis upper bound: 25kt by default, grown in 5kt increments only
     # when the data actually needs the extra headroom (raw/corrected wind
-    # & gust and DSSC/MS observations -- the ±1 std uncertainty bands are
-    # deliberately NOT considered here, so a wide-but-low-confidence band
-    # doesn't by itself push the axis taller), rather than clipping tall
-    # days at a fixed 25kt ceiling.
+    # & gust and the active source's observations -- the ±1 std
+    # uncertainty bands are deliberately NOT considered here, so a
+    # wide-but-low-confidence band doesn't by itself push the axis
+    # taller), rather than clipping tall days at a fixed 25kt ceiling.
     DEFAULT_Y_MAX = 25
     Y_STEP = 5.0
     
@@ -444,19 +519,15 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
         corr_ff[mask].max(skipna=True),
         corr_fx[mask].max(skipna=True),
     ]
-    print(f"candidate_maxes {candidate_maxes}")
+
     if obs_sp:
         candidate_maxes.append(max(obs_sp))
-    if gust_sp:
-        candidate_maxes.append(max(gust_sp))
-    if ms_sp:
-        candidate_maxes.append(max(ms_sp))
-    if ms_gust_sp:
-        candidate_maxes.append(max(ms_gust_sp))
-    if ms_now_speed is not None and pd.Series(ms_now_speed).notna().any():
-        candidate_maxes.append(pd.Series(ms_now_speed).max(skipna=True))
-    if ms_now_gust is not None and pd.Series(ms_now_gust).notna().any():
-        candidate_maxes.append(pd.Series(ms_now_gust).max(skipna=True))
+    if obs_gust_sp:
+        candidate_maxes.append(max(obs_gust_sp))
+    if now_speed is not None and pd.Series(now_speed).notna().any():
+        candidate_maxes.append(pd.Series(now_speed).max(skipna=True))
+    if now_gust is not None and pd.Series(now_gust).notna().any():
+        candidate_maxes.append(pd.Series(now_gust).max(skipna=True))
 
     candidate_maxes = [v for v in candidate_maxes if pd.notna(v)]
     data_max = max(candidate_maxes) if candidate_maxes else 0.0
@@ -480,7 +551,7 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
 
     ax.set_xlabel("Local Hour")
     ax.set_ylabel("Wind Speed (knots)")
-    ax.set_title(f"Davosersee Forecast — {date_with_weekday}", fontsize=11, fontweight="bold")
+    ax.set_title(f"Davosersee Forecast — {date_with_weekday} ({obs_label})", fontsize=11, fontweight="bold")
     ax.grid(True, linestyle=":", alpha=0.6)
     ax.legend(loc="upper right", fontsize=7, framealpha=0.8)
 
@@ -503,8 +574,64 @@ def generate_day_graph(date_str, df_day, dssc_obs, output_path, build_time_str=N
 # HTML DASHBOARD GENERATOR
 # =====================================================================
 
-def generate_mobile_html(days_data, output_file="index.html"):
+def generate_mobile_html(days_data, output_file="index.html", source_label="MS", sidecar_path=None):
+    """Renders index.html from days_data (this run's rows), persists this
+    run's data to sidecar_path so a later run of the OTHER source can pick
+    it back up, and loads that other source's sidecar (if present) so a
+    single index.html always contains both MS and DSSC data/graphs, with a
+    client-side toggle (?src=ms or ?src=dssc in the URL, defaulting to
+    MS) switching which one is visible -- since each invocation of this
+    script only computes one source (MS by default, or DSSC via --dssc),
+    neither run alone has both to render.
+
+    The MS/DSSC toggle buttons themselves are hidden by default and are
+    only revealed when the page is loaded with ?dssc=1 in the URL --
+    this is a display-only gate (the static file always contains both
+    sources' data/markup either way), enforced client-side in the
+    <script> block below since this HTML is generated once and then
+    served as-is, so there's no per-request server logic to gate it at.
+    """
     version_str, weights_updated, build_time_str = get_formatted_version_and_build()
+
+    # Persist this run's rows (JSON-serializable subset only -- see
+    # _serialize_days_data) so the other source's next run can merge it
+    # back in without needing to recompute anything.
+    serializable = _serialize_days_data(days_data)
+    if sidecar_path:
+        try:
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "source_label": source_label,
+                    "build_time_str": build_time_str,
+                    "version_str": version_str,
+                    "weights_updated": weights_updated,
+                    "days": serializable,
+                }, f, indent=2)
+        except Exception as e:
+            print(f"⚠️ Warning: could not write sidecar {sidecar_path}: {e}")
+
+    # Load the OTHER source's most recent sidecar, if any, so this page
+    # still shows something for the toggle target even though this run
+    # only just computed `source_label`.
+    other_label = "DSSC" if source_label == "MS" else "MS"
+    other_sidecar_path = SIDECAR_PATHS.get(other_label)
+    other_payload = None
+    if other_sidecar_path and Path(other_sidecar_path).exists():
+        try:
+            with open(other_sidecar_path, "r", encoding="utf-8") as f:
+                other_payload = json.load(f)
+        except Exception as e:
+            print(f"⚠️ Warning: could not read sidecar {other_sidecar_path}: {e}")
+
+    sources = {source_label: serializable}
+    build_times = {source_label: build_time_str}
+    versions = {source_label: version_str}
+    weights_updates = {source_label: weights_updated}
+    if other_payload:
+        sources[other_label] = other_payload.get("days", {})
+        build_times[other_label] = other_payload.get("build_time_str", "Unknown")
+        versions[other_label] = other_payload.get("version_str", "Unknown")
+        weights_updates[other_label] = other_payload.get("weights_updated", "Unknown")
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -517,6 +644,9 @@ def generate_mobile_html(days_data, output_file="index.html"):
         .header {{ background: #1e293b; color: white; padding: 14px; border-radius: 10px; margin-bottom: 12px; }}
         .header h1 {{ margin: 0; font-size: 1.2rem; }}
         .version {{ font-size: 0.75rem; color: #94a3b8; margin-top: 4px; line-height: 1.4; }}
+        .source-toggle {{ margin-top: 8px; }}
+        .source-toggle a {{ display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; text-decoration: none; color: #cbd5e1; border: 1px solid #475569; margin-right: 6px; }}
+        .source-toggle a.active {{ background: #38bdf8; color: #0f172a; border-color: #38bdf8; font-weight: 600; }}
         .day-card {{ background: white; border-radius: 10px; padding: 12px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow-x: auto; }}
         .day-title {{ font-weight: bold; font-size: 1.1rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }}
         .badge {{ padding: 3px 8px; border-radius: 12px; font-size: 0.75rem; color: white; }}
@@ -526,99 +656,120 @@ def generate_mobile_html(days_data, output_file="index.html"):
         table {{ width: 100%; border-collapse: collapse; font-size: 0.72rem; margin-top: 8px; white-space: nowrap; }}
         th, td {{ padding: 6px 4px; text-align: center; border-bottom: 1px solid #f1f5f9; }}
         th {{ background: #f8fafc; color: #64748b; font-weight: 600; }}
+        .source-section {{ display: none; }}
+        .source-section.active {{ display: block; }}
     </style>
 </head>
 <body>
     <div class="header">
         <h1>🏄 Davosersee Wind Forecast by Camille, DWD MOSMIX-L data with corrections</h1>
         <h1>-- experimental, at your own risk, no guarantees! --</h1>
-        <div class="version">
-            Build Time: {build_time_str}<br>
-            Model Weights Version: {version_str} (exported {weights_updated})
+        <div class="version" id="version-info"></div>
+        <div class="source-toggle" id="source-toggle" style="display: none;">
+            <a href="?src=ms&dssc=1" data-src="MS">MS (MeteoSwiss)</a><a href="?src=dssc&dssc=1" data-src="DSSC">DSSC</a>
         </div>
     </div>
 """
 
-    for date_str, data in days_data.items():
-        status_badge = '<span class="badge bg-nogo">🔴 avg.Wind<10kt </span>'
-        for ts, row in data["df"].iterrows():
-            if 10 <= ts.hour <= 19 and row["mosmix_ff_corrected_kt"] >= 10:
-                status_badge = '<span class="badge bg-go">🟢 WIN*FOIL</span>'
-         
-        html_content += f"""
-    <div class="day-card">
-        <div class="day-title">
-            <span>{date_str}</span>
-            {status_badge}
-        </div>
-        <img src="{data['graph_name']}" alt="Forecast Graph">
-        <table>
-            <thead>
-                <tr>
-                    <th>Time</th>
-                    <th>Wind Raw (kt)</th>
-                    <th>Wind Corr (kt)</th>
-                    <th>Gust Corr (kt)</th>
-                    <th>Wind Dir</th>
-                    <th>Temp (°C)</th>
-                    <th>Cloud (%)</th>
-                    <th>BL (m)</th>
-                    <th>Rain Prob (%)</th>
-                    <th>Weather</th>
-                    <th>Foehn Grad (hPa)</th>
-                    <th>MS Spd (kt)</th>
-                    <th>MS Dir</th>
-                    <th>Regime</th>
-                </tr>
-            </thead>
-            <tbody>
-"""
-        ms_hourly = data.get("ms") or {}
-        for ts, row in data["df"].iterrows():
-            if 10 <= ts.hour <= 19:
-                raw_ff = f"{row['mosmix_ff_kt']:.1f}" if pd.notna(row.get('mosmix_ff_kt')) else "-"
-                corr_ff = f"{row['mosmix_ff_corrected_kt']:.1f}" if pd.notna(row.get('mosmix_ff_corrected_kt')) else "-"
-                corr_fx = f"{row['mosmix_fx1_corrected_kt']:.1f}" if pd.notna(row.get('mosmix_fx1_corrected_kt')) else "-"
-                wind_dir = degrees_to_cardinal(row.get('mosmix_dd_deg'))
-                temp = f"{row['mosmix_tt_c']:.1f}" if pd.notna(row.get('mosmix_tt_c')) else "-"
-                cloud = f"{row['mosmix_cloud_pct']:.0f}%" if pd.notna(row.get('mosmix_cloud_pct')) else "-"
-                bl_height = f"{row['om_bl_height']:.0f}" if pd.notna(row.get('om_bl_height')) else "-"
-                rain = f"{row['om_prec_prob']:.0f}%" if pd.notna(row.get('om_prec_prob')) else "-"
-                wcode_label = describe_weather_code(row.get('om_w_codes'))
-                foehn_grad = f"{row['mosmix_dp_foehn']:.1f}" if pd.notna(row.get('mosmix_dp_foehn')) else "-"
+    version_info_by_source = {}
+    for label in sources.keys():
+        version_info_by_source[label] = (
+            f"Build Time: {build_times.get(label, 'Unknown')}<br>"
+            f"Model Weights Version: {versions.get(label, 'Unknown')} "
+            f"(exported {weights_updates.get(label, 'Unknown')}) "
+            f"— Source: {label}"
+        )
 
-                # MS (MeteoSwiss DAV) -- looked up by hour string from the
-                # per-day dict built by get_ms_hourly_for_date, same
-                # "HH:00" key convention used throughout (see analyze_day
-                # in wingfoil_predictor.py for the equivalent DSSC lookup).
-                ms_hour_obs = ms_hourly.get(ts.strftime("%H:00"))
-                ms_speed = f"{ms_hour_obs['speed']:.1f}" if ms_hour_obs and ms_hour_obs.get('speed') is not None else "-"
-                ms_dir = degrees_to_cardinal(ms_hour_obs.get('dir')) if ms_hour_obs and ms_hour_obs.get('dir') is not None else "-"
-                
+    for label, days in sources.items():
+        html_content += f"""
+    <div class="source-section" data-src="{label}">
+"""
+        for date_str, day in days.items():
+            status_badge = (
+                '<span class="badge bg-go">🟢 WIN*FOIL</span>' if day.get("go")
+                else '<span class="badge bg-nogo">🔴 avg.Wind<10kt </span>'
+            )
+            html_content += f"""
+        <div class="day-card">
+            <div class="day-title">
+                <span>{date_str}</span>
+                {status_badge}
+            </div>
+            <img src="{day['graph_name']}" alt="Forecast Graph">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Wind Raw (kt)</th>
+                        <th>Wind Corr (kt)</th>
+                        <th>Gust Corr (kt)</th>
+                        <th>Wind Dir</th>
+                        <th>Temp (°C)</th>
+                        <th>Rain Prob (%)</th>
+                        <th>Cloud (%)</th>
+                        <th>BL (m)</th>
+                        <th>Foehn Grad (hPa)</th>
+                        <th>{label} Spd (kt)</th>
+                        <th>{label} Gust (kt)</th>
+                        <th>Regime</th>
+                    </tr>
+                </thead>
+                <tbody>
+"""
+            for row in day["rows"]:
                 html_content += f"""
-                <tr>
-                    <td>{ts.strftime('%H:%M')}</td>
-                    <td>{raw_ff}</td>
-                    <td><b>{corr_ff}</b></td>
-                    <td>{corr_fx}</td>
-                    <td>{wind_dir}</td>
-                    <td>{temp}</td>
-                    <td>{cloud}</td>
-                    <td>{bl_height}</td>
-                    <td>{rain}</td>
-                    <td>{wcode_label}</td>
-                    <td>{foehn_grad}</td>
-                    <td>{ms_speed}</td>
-                    <td>{ms_dir}</td>
-                    <td>{row.get('classification', '-')}</td>
-                </tr>"""
+                    <tr>
+                        <td>{row['time']}</td>
+                        <td>{row['raw_ff']}</td>
+                        <td><b>{row['corr_ff']}</b></td>
+                        <td>{row['corr_fx']}</td>
+                        <td>{row['wind_dir']}</td>
+                        <td>{row['temp']}</td>
+                        <td>{row['rain']}</td>
+                        <td>{row['cloud']}</td>
+                        <td>{row['bl_height']}</td>
+                        <td>{row['foehn_grad']}</td>
+                        <td>{row['obs_speed']}</td>
+                        <td>{row['obs_gust']}</td>
+                        <td>{row['classification']}</td>
+                    </tr>"""
+
+            html_content += """
+                </tbody>
+            </table>
+        </div>"""
 
         html_content += """
-            </tbody>
-        </table>
     </div>"""
 
-    html_content += """
+    version_info_json = json.dumps(version_info_by_source)
+
+    html_content += f"""
+    <script>
+        const versionInfo = {version_info_json};
+        const params = new URLSearchParams(window.location.search);
+        let src = (params.get('src') || 'ms').toLowerCase();
+        const activeLabel = src === 'dssc' ? 'DSSC' : 'MS';
+
+        // The MS/DSSC toggle buttons are opt-in: only shown when the
+        // page is loaded with ?dssc=1, so casual visitors don't see a
+        // switch for a data source they haven't asked to see.
+        const toggleEl = document.getElementById('source-toggle');
+        if (toggleEl) {{
+            toggleEl.style.display = (params.get('dssc') === '1') ? '' : 'none';
+        }}
+
+        document.querySelectorAll('.source-section').forEach(el => {{
+            el.classList.toggle('active', el.getAttribute('data-src') === activeLabel);
+        }});
+        document.querySelectorAll('.source-toggle a').forEach(el => {{
+            el.classList.toggle('active', el.getAttribute('data-src') === activeLabel);
+        }});
+        const versionEl = document.getElementById('version-info');
+        if (versionEl) {{
+            versionEl.innerHTML = versionInfo[activeLabel] || versionInfo['MS'] || '';
+        }}
+    </script>
 </body>
 </html>"""
 
@@ -626,27 +777,84 @@ def generate_mobile_html(days_data, output_file="index.html"):
         f.write(html_content)
     print(f"📱 Mobile HTML dashboard generated: {output_file}")
 
+
+def _serialize_days_data(days_data):
+    """Reduces main()'s in-memory days_data (DataFrames + hourly obs
+    dicts) to a plain, JSON-serializable {date: {...}} structure --
+    exactly the fields generate_mobile_html's table/badge rendering
+    needs -- so it can be written to a sidecar file and read back by a
+    later run of the OTHER source (see generate_mobile_html)."""
+    out = {}
+    for date_str, data in days_data.items():
+        df = data["df"]
+        obs_hourly = data.get("obs_hourly") or {}
+        go = False
+        rows = []
+        for ts, row in df.iterrows():
+            if not (10 <= ts.hour <= 19):
+                continue
+            if pd.notna(row.get("mosmix_ff_corrected_kt")) and row["mosmix_ff_corrected_kt"] >= 10:
+                go = True
+
+            obs_hour_obs = obs_hourly.get(ts.strftime("%H:00"))
+            obs_speed = f"{obs_hour_obs['speed']:.1f}" if obs_hour_obs and obs_hour_obs.get('speed') is not None else "-"
+            obs_gust = f"{obs_hour_obs['gust']:.1f}" if obs_hour_obs and obs_hour_obs.get('gust') is not None else "-"
+
+            rows.append({
+                "time": ts.strftime("%H:%M"),
+                "raw_ff": f"{row['mosmix_ff_kt']:.1f}" if pd.notna(row.get('mosmix_ff_kt')) else "-",
+                "corr_ff": f"{row['mosmix_ff_corrected_kt']:.1f}" if pd.notna(row.get('mosmix_ff_corrected_kt')) else "-",
+                "corr_fx": f"{row['mosmix_fx1_corrected_kt']:.1f}" if pd.notna(row.get('mosmix_fx1_corrected_kt')) else "-",
+                "wind_dir": degrees_to_cardinal(row.get('mosmix_dd_deg')),
+                "temp": f"{row['mosmix_tt_c']:.1f}" if pd.notna(row.get('mosmix_tt_c')) else "-",
+                "cloud": f"{row['mosmix_cloud_pct']:.0f}%" if pd.notna(row.get('mosmix_cloud_pct')) else "-",
+                "bl_height": f"{row['om_bl_height']:.0f}" if pd.notna(row.get('om_bl_height')) else "-",
+                "rain": f"{row['om_prec_prob']:.0f}%" if pd.notna(row.get('om_prec_prob')) else "-",
+                "foehn_grad": f"{row['mosmix_dp_foehn']:.1f}" if pd.notna(row.get('mosmix_dp_foehn')) else "-",
+                "obs_speed": obs_speed,
+                "obs_gust": obs_gust,
+                "classification": row.get('classification', '-'),
+            })
+
+        out[date_str] = {
+            "graph_name": data["graph_name"],
+            "go": go,
+            "rows": rows,
+        }
+    return out
+
 # =====================================================================
 # MAIN EXECUTION ROUTINE
 # =====================================================================
 
+# Sidecar files each run's (MS or DSSC) table/graph data is persisted to,
+# so generate_mobile_html can merge in whichever source THIS run didn't
+# just compute -- see that function's docstring.
+SIDECAR_PATHS = {
+    "MS": "days_data_ms.json",
+    "DSSC": "days_data_dssc.json",
+}
+
 def main():
     parser = argparse.ArgumentParser(description="Standalone Wingfoil Predictor & Dashboard Generator")
-    parser.add_argument("--include-dssc", action="store_true", help="Include realtime DSSC observations")
-    parser.add_argument("--weights-file", type=str, default="model_weights.json", help="Path to weights JSON file")
+    parser.add_argument("--dssc", action="store_true",
+                         help="Use DSSC as the observation source (DSSC-fitted weights, DSSC hourly/live obs, "
+                              "_dssc-suffixed plot files) instead of MS")
+    parser.add_argument("--weights-file", type=str, default=None,
+                         help="Path to weights JSON file (default: model_weights_dssc.json with --dssc, "
+                              "else model_weights.json)")
     args = parser.parse_args()
 
+    source_label = "DSSC" if args.dssc else "MS"
+    weights_file = args.weights_file or ("model_weights_dssc.json" if args.dssc else "model_weights.json")
+
     global EXPORTED_WEIGHTS
-    EXPORTED_WEIGHTS = load_exported_weights(args.weights_file)
+    EXPORTED_WEIGHTS = load_exported_weights(weights_file)
     version_str, weights_updated, build_time_str = get_formatted_version_and_build()
 
     print(f"🚀 Running Wingfoil Prediction Engine [{version_str} - Exported: {weights_updated}]")
     print(f"🕒 Build Time: {build_time_str}")
-    if args.include_dssc:
-        print("📡 DSSC Realtime Observations: ENABLED")
-    else:
-        print("📡 DSSC Realtime Observations: DISABLED")
-    print("🇨🇭 MS (MeteoSwiss DAV) Observations: ENABLED (always on, default observation source; see --include-dssc for the secondary DSSC source)")
+    print(f"📡 Observation source for this run: {source_label} (weights: {weights_file})")
 
     station_id = CONFIG["locations"]["davos"]["station_id"]
     lat = CONFIG["locations"]["davos"]["lat"]
@@ -656,7 +864,12 @@ def main():
     tz_name = CONFIG["settings"]["timezone"]
     today = datetime.now(ZoneInfo(tz_name))
     dates = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(3)]
-    img_names = ["today.png", "tomorrow.png", "dayaftertomorrow.png"]
+    # Graph filenames get a _dssc suffix for a --dssc run, so an MS run
+    # and a DSSC run never overwrite each other's plot files -- index.html
+    # references whichever set matches the source the visitor toggled to.
+    base_img_names = ["today", "tomorrow", "dayaftertomorrow"]
+    suffix = "_dssc" if args.dssc else ""
+    img_names = [f"{name}{suffix}.png" for name in base_img_names]
 
     df_mosmix = fetch_mosmix(station_id)
     df_om = fetch_openmeteo(lat, lon, dates[0], dates[-1])
@@ -714,70 +927,78 @@ def main():
 
     days_data = {}
 
-    # MS (MeteoSwiss DAV) -- default observation source for the same site
-    # as DSSC (see CategorizedWindCorrectionPipeline._select_ground_truth
-    # for the equivalent default in the fitting pipeline). Always on
-    # (unlike DSSC's --include-dssc opt-in). Fetched ONCE here, outside
-    # the per-day loop below, and sliced per day via
-    # get_ms_hourly_for_date -- unlike the pre-existing DSSC fetch, which
-    # re-fetches on every loop iteration when --include-dssc is set. That
-    # DSSC behavior is left as-is (out of scope for this change) but
-    # there's no reason to repeat the same inefficiency for MS.
-    print(f"📥 Récupération des observations MS (MeteoSwiss, station {ms_station_abbr})...")
-    ms_df = fetch_ms_hourly_data(station_abbr=ms_station_abbr)
-    if ms_df is None or ms_df.empty:
-        print("⚠️ Warning: MS data unavailable -- graphs/table will show no "
-              "observations for this run unless --include-dssc is set "
-              "(MS columns will be blank).")
+    # Only the active source (MS by default, or DSSC via --dssc) is
+    # fetched and shown -- matching wingfoil_predictor.py's analyze_day/
+    # plot_prediction_summary gating, so a run's graph/table never mixes
+    # observation sources.
+    ms_df = None
+    if not args.dssc:
+        print(f"📥 Récupération des observations MS (MeteoSwiss, station {ms_station_abbr})...")
+        ms_df = fetch_ms_hourly_data(station_abbr=ms_station_abbr)
+        if ms_df is None or ms_df.empty:
+            print("⚠️ Warning: MS data unavailable -- graphs/table will show no observations for this run.")
 
     for i, d_str in enumerate(dates):
         df_day = df_predicted[df_predicted.index.strftime("%Y-%m-%d") == d_str]
         if not df_day.empty:
-            dssc_hourly = None
-            if args.include_dssc:
-                dssc_wind = fetch_dssc_data("winddata")
-                dssc_wind_dir = fetch_dssc_data("wdirdata")
-                dssc_temp = fetch_dssc_data("tempdata")
-                dssc_hourly = process_dssc_hourly(dssc_wind, dssc_wind_dir, dssc_temp, d_str)
+            now_hours = now_speed = now_gust = None
+            is_today = (d_str == today.strftime("%Y-%m-%d"))
 
-            ms_hourly = get_ms_hourly_for_date(ms_df, d_str)
+            if args.dssc:
+                dssc_json = fetch_dssc_data(d_str)
+                obs_hourly = process_dssc_hourly(dssc_json, d_str)
 
-            # For TODAY only, additionally pull the MS 10-minute "_t_now_"
-            # file (same as wingfoil_predictor.py's main()): it gives a
-            # running average for the current, still-incomplete hour
-            # (folded into ms_hourly so the table's current-hour row and
-            # the "GO" badge see it too) plus the raw 10-minute points
-            # used for the finer-grained "now" curve on the graph. Past
-            # days are untouched -- ms_now_hours/speed/gust stay None.
-            ms_now_hours = ms_now_speed = ms_now_gust = None
-            if d_str == today.strftime("%Y-%m-%d"):
-                print("📥 Récupération des observations MS 10 min (station DAV, jour courant)...")
-                ms_now_df = fetch_ms_now_data(station_abbr=ms_station_abbr)
-                ms_hourly_so_far = compute_ms_hourly_so_far(ms_now_df, d_str)
-                for hour_str, obs in ms_hourly_so_far.items():
-                    ms_hourly[hour_str] = obs
+                # DSSC's own live 10-minute curve for today, built from
+                # the same dssc_json payload already fetched above --
+                # mirrors wingfoil_predictor.py's build_dssc_now_df.
+                if is_today:
+                    now_df = build_dssc_now_df(dssc_json, d_str)
+                    if not now_df.empty:
+                        now_hours = now_df.index.hour + now_df.index.minute / 60.0
+                        now_speed = now_df["dssc_speed_kt"] if "dssc_speed_kt" in now_df else None
+                        now_gust = now_df["dssc_gust_kt"] if "dssc_gust_kt" in now_df else None
+            else:
+                obs_hourly = get_ms_hourly_for_date(ms_df, d_str)
 
-                if ms_now_df is not None and not ms_now_df.empty:
-                    day_mask = ms_now_df.index.strftime("%Y-%m-%d") == d_str
-                    ms_now_day = ms_now_df[day_mask]
-                    if not ms_now_day.empty:
-                        ms_now_hours = ms_now_day.index.hour + ms_now_day.index.minute / 60.0
-                        ms_now_speed = ms_now_day["ms_speed_kt"] if "ms_speed_kt" in ms_now_day else None
-                        ms_now_gust = ms_now_day["ms_gust_kt"] if "ms_gust_kt" in ms_now_day else None
+                # For TODAY only, additionally pull the MS 10-minute
+                # "_t_now_" file (same as wingfoil_predictor.py's
+                # main()): it gives a running average for the current,
+                # still-incomplete hour (folded into obs_hourly so the
+                # table's current-hour row and the "GO" badge see it
+                # too) plus the raw 10-minute points used for the
+                # finer-grained "now" curve on the graph. Past days are
+                # untouched -- now_hours/speed/gust stay None.
+                if is_today:
+                    print("📥 Récupération des observations MS 10 min (station DAV, jour courant)...")
+                    ms_now_df = fetch_ms_now_data(station_abbr=ms_station_abbr)
+                    ms_hourly_so_far = compute_ms_hourly_so_far(ms_now_df, d_str)
+                    for hour_str, obs in ms_hourly_so_far.items():
+                        obs_hourly[hour_str] = obs
+
+                    if ms_now_df is not None and not ms_now_df.empty:
+                        day_mask = ms_now_df.index.strftime("%Y-%m-%d") == d_str
+                        ms_now_day = ms_now_df[day_mask]
+                        if not ms_now_day.empty:
+                            now_hours = ms_now_day.index.hour + ms_now_day.index.minute / 60.0
+                            now_speed = ms_now_day["ms_speed_kt"] if "ms_speed_kt" in ms_now_day else None
+                            now_gust = ms_now_day["ms_gust_kt"] if "ms_gust_kt" in ms_now_day else None
 
             graph_name = img_names[i]
             generate_day_graph(
-                d_str, df_day, dssc_hourly, graph_name, build_time_str=build_time_str, ms_obs=ms_hourly,
-                ms_now_hours=ms_now_hours, ms_now_speed=ms_now_speed, ms_now_gust=ms_now_gust
+                d_str, df_day, graph_name, build_time_str=build_time_str,
+                obs_hourly=obs_hourly, obs_label=source_label,
+                now_hours=now_hours, now_speed=now_speed, now_gust=now_gust
             )
             days_data[d_str] = {
                 "df": df_day,
-                "dssc": dssc_hourly,
-                "ms": ms_hourly,
+                "obs_hourly": obs_hourly,
                 "graph_name": graph_name
             }
 
-    generate_mobile_html(days_data, "index.html")
+    generate_mobile_html(
+        days_data, "index.html",
+        source_label=source_label, sidecar_path=SIDECAR_PATHS[source_label]
+    )
 
 if __name__ == "__main__":
     main()
