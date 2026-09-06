@@ -21,6 +21,7 @@ import argparse
 import io
 import json
 import sys
+import time
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import matplotlib.pyplot as plt
 
 from foehn_gradient import get_combined_data_foehn_gradient
@@ -171,6 +174,58 @@ def fetch_mosmix(station_id):
         print(f"⚠️ Error fetching MOSMIX: {e}")
         return None
 
+# Open-Meteo response cache -- see fetch_openmeteo()'s docstring. A
+# plain file next to the script (not a repo path, not committed) so it
+# only lives for the duration of one runner/workflow execution; the
+# short TTL means a stale file left over from a previous run (if the
+# runner filesystem were ever reused) can't silently serve outdated
+# forecast data.
+OPENMETEO_CACHE_FILE = Path(".openmeteo_cache.json")
+OPENMETEO_CACHE_TTL_SECONDS = 30 * 60  # comfortably covers the two
+                                        # back-to-back invocations
+                                        # (--dssc, then plain) the
+                                        # workflow runs in one job
+
+
+def _load_openmeteo_cache(cache_key):
+    """Returns a cached Open-Meteo DataFrame for cache_key if the cache
+    file exists, matches this exact key, and is within
+    OPENMETEO_CACHE_TTL_SECONDS -- else None (any problem reading/
+    parsing the cache is treated the same as "no cache", never as an
+    error, since the cache is purely an optimization)."""
+    if not OPENMETEO_CACHE_FILE.exists():
+        return None
+    try:
+        with open(OPENMETEO_CACHE_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if payload.get("key") != cache_key:
+            return None
+        if time.time() - payload.get("fetched_at", 0) > OPENMETEO_CACHE_TTL_SECONDS:
+            return None
+        df = pd.DataFrame(payload["data"])
+        df.index = pd.to_datetime(payload["index"])
+        return df
+    except Exception:
+        return None
+
+
+def _save_openmeteo_cache(cache_key, df):
+    """Best-effort write of a successful Open-Meteo response to disk.
+    Never raises -- a failure to cache should not fail the run that
+    just successfully fetched live data."""
+    try:
+        payload = {
+            "key": cache_key,
+            "fetched_at": time.time(),
+            "index": [ts.isoformat() for ts in df.index],
+            "data": df.to_dict(orient="list"),
+        }
+        with open(OPENMETEO_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+    except Exception as e:
+        print(f"⚠️ Warning: could not write Open-Meteo cache: {e}")
+
+
 def fetch_openmeteo(lat, lon, start_date, end_date):
     """Fetches Open-Meteo hourly forecast fields used by
     category_feature_sets / category_fx1_feature_sets.
@@ -186,7 +241,25 @@ def fetch_openmeteo(lat, lon, start_date, end_date):
     were silently absent (defaulted to 0.0 in the correction pipeline) for
     every live prediction made by this script, even though the
     corresponding model was fit on the real values.
+
+    Resilience: the GitHub Actions workflow invokes this script twice,
+    back-to-back, with identical (lat, lon, start_date, end_date) --
+    once with --dssc, once without -- so a single transient Open-Meteo
+    slowdown used to have two independent chances to blow past the
+    request timeout and sys.exit(1) the whole run. Two things soften
+    that: (1) the HTTP call itself now retries transient failures
+    (timeouts, connection errors, 5xx) a few times with backoff instead
+    of giving up after one attempt; (2) a successful response is cached
+    to a small on-disk JSON file keyed on the exact parameters used, so
+    the second invocation in the same workflow run reuses it instead of
+    hitting the live API again at all.
     """
+    cache_key = f"{lat}:{lon}:{start_date}:{end_date}"
+    cached_df = _load_openmeteo_cache(cache_key)
+    if cached_df is not None:
+        print("♻️  Open-Meteo: reusing cached response from earlier this run.")
+        return cached_df
+
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -199,11 +272,21 @@ def fetch_openmeteo(lat, lon, start_date, end_date):
         "start_date": start_date,
         "end_date": end_date,
     }
+    session = requests.Session()
+    # 3 attempts total, waiting 2s/4s/8s between them, on connection
+    # errors, read timeouts, and 429/5xx responses -- a lone transient
+    # hiccup (slow edge node, brief throttling on a shared runner IP,
+    # ...) now has a chance to clear before the run gives up on it.
+    retry_cfg = Retry(total=3, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504])
+    session.mount("https://", HTTPAdapter(max_retries=retry_cfg))
     try:
-        res = requests.get(url, params=params, timeout=10)
+        # (connect_timeout, read_timeout) -- read given more headroom
+        # than the old flat 10s, since that's the leg that was timing
+        # out in practice.
+        res = session.get(url, params=params, timeout=(5, 20))
         if res.status_code == 200:
             h = res.json().get("hourly", {})
-            return pd.DataFrame({
+            df = pd.DataFrame({
                 "om_wind_speed_700hPa_kt": h.get("wind_speed_700hPa", []),
                 "om_wind_direction_700hPa": h.get("wind_direction_700hPa", []),
                 "om_wind_speed_800hPa_kt": h.get("wind_speed_800hPa", []),
@@ -215,6 +298,10 @@ def fetch_openmeteo(lat, lon, start_date, end_date):
                 "om_bl_height": h.get("boundary_layer_height", []),
                 "om_soil_temp_0cm": h.get("soil_temperature_0cm", []),
             }, index=pd.to_datetime(h.get("time")).tz_localize(None))
+            _save_openmeteo_cache(cache_key, df)
+            return df
+        else:
+            print(f"⚠️ Open-Meteo returned HTTP {res.status_code}")
     except Exception as e:
         print(f"⚠️ Error fetching Open-Meteo: {e}")
     return None
