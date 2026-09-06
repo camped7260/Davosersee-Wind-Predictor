@@ -45,15 +45,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          #python predict_html.py --include-dssc
           python predict_html.py
+          python predict_html.py --dssc
 
       - name: Organize build artifacts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p public
-          mv index.html today.png tomorrow.png dayaftertomorrow.png public/
+          mv index.html today*.png tomorrow*.png dayaftertomorrow*.png public/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
