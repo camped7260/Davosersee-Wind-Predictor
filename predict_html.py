@@ -760,8 +760,7 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
 </head>
 <body>
     <div class="header">
-        <h1>🏄 Davosersee Wind Forecast by Camille, DWD MOSMIX-L data with corrections</h1>
-        <h1>-- experimental, at your own risk, no guarantees! --</h1>
+        <h1>🏄 Davosersee Wind Forecast (experimental)</h1>
         <div class="version" id="version-info"></div>
         <div class="source-toggle" id="source-toggle" style="display: none;">
             <a href="?src=ms&dssc=1" data-src="MS">MS (MeteoSwiss)</a><a href="?src=dssc&dssc=1" data-src="DSSC">DSSC</a>
@@ -773,10 +772,10 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
     version_info_by_source = {}
     for label in sources.keys():
         version_info_by_source[label] = (
-            f"Build Time: {build_times.get(label, 'Unknown')}<br>"
-            f"Model Weights Version: {versions.get(label, 'Unknown')} "
-            f"(exported {weights_updates.get(label, 'Unknown')}) "
-            f"— Source: {label}"
+            f"Built: {build_times.get(label, 'Unknown')}<br>"
+            f"Weights: {versions.get(label, 'Unknown')} "
+            f"({weights_updates.get(label, 'Unknown')}) "
+            f"— {label}"
         )
 
     for label, days in sources.items():
