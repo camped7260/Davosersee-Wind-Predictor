@@ -227,8 +227,10 @@ def _save_openmeteo_cache(cache_key, df):
 
 
 def fetch_openmeteo(lat, lon, start_date, end_date):
-    """Fetches Open-Meteo hourly forecast fields used by
-    category_feature_sets / category_fx1_feature_sets.
+    """Fetches Open-Meteo hourly forecast fields used as candidate features
+    in the fitted category feature sets (see model_weights.json /
+    model_weights_dssc.json's per-category "features" list, loaded via
+    CategorizedWindCorrectionPipeline.from_exported_weights).
 
     Column names and units are now identical to wingfoil_predictor.py's
     fetch_openmeteo (wind_speed_unit=kn, so no manual m/s->kt conversion;
@@ -236,7 +238,7 @@ def fetch_openmeteo(lat, lon, start_date, end_date):
     10m wind fields). Previously this function used different parameters
     (wind_speed_unit=ms + manual conversion) and different column names
     (om_syn_ff_kt, om_syn_dd_deg, om_syn_800hPa_kt) than the training
-    script -- config.json's category_feature_sets reference
+    script -- the fitted models' feature lists reference
     om_wind_speed_700hPa_kt / om_wind_direction_700hPa, so those features
     were silently absent (defaulted to 0.0 in the correction pipeline) for
     every live prediction made by this script, even though the
@@ -727,13 +729,22 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Davosersee Wind Forecast</title>
     <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f8f9fa; margin: 0; padding: 12px; color: #212529; }}
-        .header {{ background: #1e293b; color: white; padding: 14px; border-radius: 10px; margin-bottom: 12px; }}
+        html, body {{ height: 100%; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f8f9fa; margin: 0; padding: 0; color: #212529; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }}
+        .header {{ background: #1e293b; color: white; padding: 14px 12px; margin: 0; flex: 0 0 auto; box-shadow: 0 2px 4px rgba(0,0,0,0.15); z-index: 10; }}
         .header h1 {{ margin: 0; font-size: 1.2rem; }}
         .version {{ font-size: 0.75rem; color: #94a3b8; margin-top: 4px; line-height: 1.4; }}
         .source-toggle {{ margin-top: 8px; }}
         .source-toggle a {{ display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; text-decoration: none; color: #cbd5e1; border: 1px solid #475569; margin-right: 6px; }}
         .source-toggle a.active {{ background: #38bdf8; color: #0f172a; border-color: #38bdf8; font-weight: 600; }}
+        /* Scrollable content area below the fixed header. Both the MS and
+           DSSC .source-section divs live inside THIS one shared scroller
+           (see the markup below) rather than each having their own -- that
+           is what makes switching sources preserve scroll position: the
+           scrollTop being saved/restored belongs to #scroll-frame, not to
+           whichever section happens to be visible, so there is exactly one
+           scroll position to carry across the toggle. */
+        #scroll-frame {{ flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px; box-sizing: border-box; }}
         .day-card {{ background: white; border-radius: 10px; padding: 12px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow-x: auto; }}
         .day-title {{ font-weight: bold; font-size: 1.1rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }}
         .badge {{ padding: 3px 8px; border-radius: 12px; font-size: 0.75rem; color: white; }}
@@ -756,6 +767,7 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
             <a href="?src=ms&dssc=1" data-src="MS">MS (MeteoSwiss)</a><a href="?src=dssc&dssc=1" data-src="DSSC">DSSC</a>
         </div>
     </div>
+    <div id="scroll-frame">
 """
 
     version_info_by_source = {}
@@ -829,6 +841,10 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
         html_content += """
     </div>"""
 
+    html_content += """
+    </div>
+"""
+
     version_info_json = json.dumps(version_info_by_source)
 
     html_content += f"""
@@ -836,25 +852,63 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
         const versionInfo = {version_info_json};
         const params = new URLSearchParams(window.location.search);
         let src = (params.get('src') || 'ms').toLowerCase();
-        const activeLabel = src === 'dssc' ? 'DSSC' : 'MS';
+        let activeLabel = src === 'dssc' ? 'DSSC' : 'MS';
+        const scrollFrame = document.getElementById('scroll-frame');
 
         // The MS/DSSC toggle buttons are opt-in: only shown when the
         // page is loaded with ?dssc=1, so casual visitors don't see a
         // switch for a data source they haven't asked to see.
         const toggleEl = document.getElementById('source-toggle');
+        const dsscParam = params.get('dssc') === '1';
         if (toggleEl) {{
-            toggleEl.style.display = (params.get('dssc') === '1') ? '' : 'none';
+            toggleEl.style.display = dsscParam ? '' : 'none';
         }}
 
-        document.querySelectorAll('.source-section').forEach(el => {{
-            el.classList.toggle('active', el.getAttribute('data-src') === activeLabel);
-        }});
-        document.querySelectorAll('.source-toggle a').forEach(el => {{
-            el.classList.toggle('active', el.getAttribute('data-src') === activeLabel);
-        }});
-        const versionEl = document.getElementById('version-info');
-        if (versionEl) {{
-            versionEl.innerHTML = versionInfo[activeLabel] || versionInfo['MS'] || '';
+        function applyActiveSource(label) {{
+            document.querySelectorAll('.source-section').forEach(el => {{
+                el.classList.toggle('active', el.getAttribute('data-src') === label);
+            }});
+            document.querySelectorAll('.source-toggle a').forEach(el => {{
+                el.classList.toggle('active', el.getAttribute('data-src') === label);
+            }});
+            const versionEl = document.getElementById('version-info');
+            if (versionEl) {{
+                versionEl.innerHTML = versionInfo[label] || versionInfo['MS'] || '';
+            }}
+        }}
+
+        applyActiveSource(activeLabel);
+
+        // Switching MS<->DSSC is handled entirely client-side (no page
+        // reload) so the SAME #scroll-frame element -- shared by both
+        // .source-section divs -- keeps whatever scrollTop the visitor
+        // was already at. That is what makes the two views directly
+        // comparable: scrolling to, say, tomorrow's graph in MS and then
+        // switching to DSSC lands on tomorrow's graph in DSSC too,
+        // instead of resetting to the top the way a normal link
+        // navigation (or independently-scrolling sections) would.
+        if (toggleEl) {{
+            toggleEl.querySelectorAll('a').forEach(el => {{
+                el.addEventListener('click', (evt) => {{
+                    evt.preventDefault();
+                    const label = el.getAttribute('data-src');
+                    if (label === activeLabel) return;
+                    activeLabel = label;
+                    applyActiveSource(activeLabel);
+                    const newSrc = label === 'DSSC' ? 'dssc' : 'ms';
+                    const url = new URL(window.location.href);
+                    url.searchParams.set('src', newSrc);
+                    url.searchParams.set('dssc', '1');
+                    window.history.replaceState({{}}, '', url);
+                    // scrollFrame.scrollTop is untouched by the section
+                    // toggle above (display:none/block on a child doesn't
+                    // move its scrolled ancestor), so no explicit
+                    // save/restore is even needed here -- the frame simply
+                    // never moved. Left as a no-op comment rather than
+                    // silently relying on that being obvious to a future
+                    // reader.
+                }});
+            }});
         }}
     </script>
 </body>

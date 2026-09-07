@@ -110,15 +110,22 @@ class CategorizedWindCorrectionPipeline:
         self.station_lat = davos_loc.get("lat", 46.8041)
         self.station_lon = davos_loc.get("lon", 9.8372)
 
-        # 2. Category-specific predictor feature registries from config,
-        # falling back to DEFAULT_CONFIG (single source of truth, see top of
-        # file) rather than a second hardcoded copy that could silently
-        # diverge from it.
-        self.category_feature_sets = config.get(
-            "category_feature_sets", DEFAULT_CONFIG["category_feature_sets"]
-        )
-        self.category_fx1_feature_sets = config.get(
-            "category_fx1_feature_sets", DEFAULT_CONFIG["category_fx1_feature_sets"]
+        # 2. Category-specific predictor feature registries. These are NOT
+        # part of config.json/DEFAULT_CONFIG (see wf_common.py's comment
+        # above DEFAULT_CONFIG for why -- MS and DSSC are two distinct
+        # fitted models and need independent per-category feature
+        # selections that would silently clobber each other in one shared
+        # config.json section). Instead, each is read from whichever
+        # weights file matches use_dssc_for_fit -- model_weights.json for
+        # MS, model_weights_dssc.json for DSSC -- since that's where
+        # run_database_analysis's --analyze now saves recommended feature
+        # sets (alongside the coefficients fit under them). fit_from_database
+        # below only *uses* self.category_feature_sets/category_fx1_feature_sets
+        # (via .get(cat)); it doesn't choose them, so a category missing
+        # here simply won't get a fitted model, same as before.
+        weights_filepath = "model_weights_dssc.json" if self.use_dssc_for_fit else "model_weights.json"
+        self.category_feature_sets, self.category_fx1_feature_sets = (
+            self._load_feature_sets_from_weights_file(weights_filepath)
         )
         
         # Internal registries
@@ -137,6 +144,38 @@ class CategorizedWindCorrectionPipeline:
         # Fit models on initialization if database is available
         if self.db_filepath:
             self.fit_from_database()
+
+    @staticmethod
+    def _load_feature_sets_from_weights_file(weights_filepath):
+        """Reads {category: features} for both the mean (ff) and gust (fx1)
+        regressors out of a model_weights.json-style file on disk, from
+        each category's "features" key under bayesian_models /
+        bayesian_fx1_models (the same key export_weights_dict's
+        serialize_pipeline writes). Returns ({}, {}) if the file doesn't
+        exist yet or can't be read/parsed -- e.g. before the first
+        --analyze/--export_model run for that model -- so a fresh
+        checkout with no weights file yet just fits nothing rather than
+        raising.
+        """
+        if not os.path.exists(weights_filepath):
+            return {}, {}
+        try:
+            with open(weights_filepath, "r", encoding="utf-8") as f:
+                weights = json.load(f)
+        except Exception:
+            return {}, {}
+
+        feature_sets = {
+            cat: list(m["features"])
+            for cat, m in weights.get("bayesian_models", {}).items()
+            if m.get("features")
+        }
+        fx1_feature_sets = {
+            cat: list(m["features"])
+            for cat, m in weights.get("bayesian_fx1_models", {}).items()
+            if m.get("features")
+        }
+        return feature_sets, fx1_feature_sets
 
     @classmethod
     def from_exported_weights(cls, weights, min_samples_for_ridge=10):
@@ -190,12 +229,13 @@ class CategorizedWindCorrectionPipeline:
         davos_loc = config.get("locations", {}).get("davos", {})
         self.station_lat = davos_loc.get("lat", 46.8041)
         self.station_lon = davos_loc.get("lon", 9.8372)
-        self.category_feature_sets = dict(config.get(
-            "category_feature_sets", DEFAULT_CONFIG["category_feature_sets"]
-        ))
-        self.category_fx1_feature_sets = dict(config.get(
-            "category_fx1_feature_sets", DEFAULT_CONFIG["category_fx1_feature_sets"]
-        ))
+        # Populated below from `weights` itself (this method's whole
+        # purpose is to reconstruct a model from an exported
+        # model_weights.json/model_weights_dssc.json dict) -- no
+        # config.json fallback needed or wanted here; see wf_common.py's
+        # comment above DEFAULT_CONFIG.
+        self.category_feature_sets = {}
+        self.category_fx1_feature_sets = {}
 
         self.global_fallback_bias = weights.get("global_fallback_bias", 0.0)
         self.global_std_bias = weights.get("global_std_bias", 0.0)
@@ -208,18 +248,12 @@ class CategorizedWindCorrectionPipeline:
 
         # The scaler/ridge rebuilt below for each category were fit on the
         # exact column names/order stored in the exported weights' own
-        # "features" key -- that, not config.json, is the ground truth for
-        # what a *fitted* model expects. config.json's category_feature_sets
-        # is allowed to drift from model_weights.json between deploys (e.g.
-        # a stale feature name left over from an earlier feature-engineering
-        # version, or a re-export that changed the selected features for a
-        # category); when it does, process() would otherwise build the
-        # prediction-time DataFrame using config.json's (wrong) column
-        # names, and sklearn's fitted-feature-name check on the frozen
-        # scaler raises ValueError. Overriding per-category here from the
-        # weights themselves keeps process() structurally unable to ask a
-        # rebuilt model for columns it wasn't fit on. config.json's entries
-        # remain the fallback for any category with no fitted model.
+        # "features" key -- that is the sole ground truth for what a
+        # *fitted* model expects (there is no other source: no
+        # config.json fallback for feature sets anymore). Populating
+        # self.category_feature_sets/category_fx1_feature_sets directly
+        # from `weights` here keeps process() structurally unable to ask
+        # a rebuilt model for columns it wasn't fit on.
         for cat, m in weights.get("bayesian_models", {}).items():
             if m.get("features"):
                 self.category_feature_sets[cat] = list(m["features"])
@@ -1369,7 +1403,7 @@ class CategorizedWindCorrectionPipeline:
         export_time_str = now_local.strftime("%Y-%m-%d %H:%M:%S %Z")
 
         export_data = {
-            "version": "MOSMIX_V26",
+            "version": "MOSMIX_V27",
             "updated_at": export_time_str,
             "global_fallback_bias": self.global_fallback_bias,
             "global_std_bias": self.global_std_bias,

@@ -76,9 +76,22 @@ DEFAULT_CONFIG = {
     "locations": {
         "davos": {"lat": 46.8041, "lon": 9.8372, "station_id": "06784", "ms_station_abbr": "DAV"}
     },
-    "category_feature_sets": {},
-    "category_fx1_feature_sets": {},
 }
+
+# category_feature_sets / category_fx1_feature_sets are intentionally NOT
+# part of config.json/DEFAULT_CONFIG anymore. MS and DSSC are two distinct
+# fitted models (see CategorizedWindCorrectionPipeline's use_dssc_for_fit)
+# and a single shared config.json section can't hold two different
+# per-category feature selections for the same category name without one
+# silently overwriting the other. Feature selection is now recorded per
+# model, alongside the fitted coefficients it was selected for, inside
+# each category's entry in model_weights.json (MS) / model_weights_dssc.json
+# (DSSC) -- see export_weights_dict's serialize_pipeline (writes
+# "features") and CategorizedWindCorrectionPipeline.from_exported_weights
+# (reads "features" back out per category). Both wingfoil_predictor.py's
+# --analyze (which now calls export_weights_to_json with the recommended
+# feature sets baked into the pipeline before exporting) and --export_model
+# go through that one export path.
 
 
 def load_config(verbose=False):
@@ -88,17 +101,23 @@ def load_config(verbose=False):
     Merge is per-key within each dict section: a key present only in
     DEFAULT_CONFIG survives even when config.json also defines that
     section, because config.json's keys only overwrite matching keys,
-    never the whole section. Pass verbose=True to print which
-    category_feature_sets / category_fx1_feature_sets keys came from disk
-    vs. code defaults.
+    never the whole section. Pass verbose=True to print a settings-only
+    disk-vs-default source map.
 
     Both wingfoil_predictor.py (training/analysis) and predict_html.py
     (live prediction) call this same function, so config.json is the one
     on-disk source of truth for both -- previously predict_html.py used a
     hardcoded CONFIG dict and never actually read config.json, so any
-    tuning done there (rain_prob_confirm_threshold, foehn_stations,
-    category_feature_sets, ...) silently applied to training but not to
-    live prediction.
+    tuning done there (rain_prob_confirm_threshold, foehn_stations, ...)
+    silently applied to training but not to live prediction.
+
+    Note: category_feature_sets / category_fx1_feature_sets are NOT part
+    of this config anymore -- see the comment above DEFAULT_CONFIG. Any
+    such keys still lingering in an old config.json on disk are loaded
+    into the returned dict as-is (nothing here strips them) but nothing
+    in this codebase reads them from here; CategorizedWindCorrectionPipeline
+    gets its per-category feature lists from model_weights.json /
+    model_weights_dssc.json instead.
     """
     config = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
     disk_keys_by_section = {}
@@ -120,15 +139,12 @@ def load_config(verbose=False):
 
     if verbose:
         print("\n" + "=" * 80)
-        print("🔧 CONFIG SOURCE MAP (category origin: disk vs. code default)")
+        print("🔧 CONFIG SOURCE MAP (settings origin: disk vs. code default)")
         print("=" * 80)
-        for section in ("category_feature_sets", "category_fx1_feature_sets"):
-            all_cats = sorted(config.get(section, {}).keys())
-            from_disk = set(disk_keys_by_section.get(section, []))
-            print(f"\n📁 {section}:")
-            for cat in all_cats:
-                origin = "config.json" if cat in from_disk else "DEFAULT_CONFIG (code)"
-                print(f"   • {cat:<28} <- {origin}")
+        from_disk = set(disk_keys_by_section.get("settings", []))
+        for key in sorted(config.get("settings", {}).keys()):
+            origin = "config.json" if key in from_disk else "DEFAULT_CONFIG (code)"
+            print(f"   • {key:<32} <- {origin}")
         print("=" * 80)
 
     return config
