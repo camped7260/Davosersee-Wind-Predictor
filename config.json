@@ -10,6 +10,7 @@
         "rain_prob_confirm_threshold": 50.0,
         "nordfoehn_threshold_hpa": 3.5,
         "sudfoehn_threshold_hpa": 1.5,
+        "sudfoehn_warning_threshold_hpa": 3.0,
         "locations": {
             "davos": {
                 "name": "Davos (Davosersee)",

@@ -58,6 +58,8 @@ from wf_common import (
     kelvin_to_celsius,
     degrees_to_cardinal,
     clean_namespaces,
+    sudfoehn_daily_extreme,
+    format_sudfoehn_warning,
     fetch_ms_hourly_data,
     get_ms_hourly_for_date,
     fetch_ms_now_data,
@@ -587,7 +589,22 @@ def generate_day_graph(date_str, df_day, output_path, build_time_str=None, obs_h
         )
 
     ax.axhline(CONFIG["settings"]["wind_threshold_knots"], color="#e74c3c", linestyle=":", alpha=0.7, label="Threshold (10kt)")
-    
+
+    # Strong-Sudfoehn marker: vertical line at the hour of the day's most
+    # negative dp_foehn, only drawn once it clears sudfoehn_warning_threshold_hpa
+    # -- see wf_common.sudfoehn_daily_extreme / format_sudfoehn_warning.
+    # Same helper/threshold wingfoil_predictor.py's plot_prediction_summary
+    # and export_regime_backtests_and_csvs use, so the caveat looks and
+    # triggers identically whether it comes from a training-side run or
+    # this live dashboard.
+    sudfoehn_warning_threshold = CONFIG["settings"].get("sudfoehn_warning_threshold_hpa", 3.0)
+    sudfoehn_extreme = sudfoehn_daily_extreme(df_day)
+    sudfoehn_warning = format_sudfoehn_warning(sudfoehn_extreme, threshold_hpa=sudfoehn_warning_threshold)
+    if sudfoehn_warning and sudfoehn_extreme.get("hour_float") is not None:
+        sf_hour = sudfoehn_extreme["hour_float"]
+        sf_label = f"Südfoehn fort ({sudfoehn_extreme['min_dp']:+.1f} hPa @ {sudfoehn_extreme['time_label']})"
+        ax.axvline(sf_hour, color="#8e44ad", linestyle=":", linewidth=2, alpha=0.8, label=sf_label, zorder=6)
+
     # Limits & Spacing
     ax.set_xlim(10, 19)
     ax.set_xticks(range(10, 20))
@@ -750,6 +767,7 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
         .badge {{ padding: 3px 8px; border-radius: 12px; font-size: 0.75rem; color: white; }}
         .bg-go {{ background: #22c55e; }}
         .bg-nogo {{ background: #ef4444; }}
+        .sudfoehn-banner {{ background: #f3e8ff; color: #6b21a8; border: 1px solid #d8b4fe; border-radius: 8px; padding: 6px 10px; font-size: 0.72rem; margin: 0 0 8px 0; line-height: 1.35; }}
         img {{ width: 100%; border-radius: 6px; margin: 8px 0; }}
         table {{ width: 100%; border-collapse: collapse; font-size: 0.72rem; margin-top: 8px; white-space: nowrap; }}
         th, td {{ padding: 6px 4px; text-align: center; border-bottom: 1px solid #f1f5f9; }}
@@ -787,12 +805,17 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
                 '<span class="badge bg-go">🟢 WIN*FOIL</span>' if day.get("go")
                 else '<span class="badge bg-nogo">🔴 avg.Wind<10kt </span>'
             )
+            sudfoehn_banner = (
+                f'<div class="sudfoehn-banner">{day["sudfoehn_warning"]}</div>'
+                if day.get("sudfoehn_warning") else ""
+            )
             html_content += f"""
         <div class="day-card">
             <div class="day-title">
                 <span>{date_str}</span>
                 {status_badge}
             </div>
+            {sudfoehn_banner}
             <img src="{day['graph_name']}" alt="Forecast Graph">
             <table>
                 <thead>
@@ -925,11 +948,21 @@ def _serialize_days_data(days_data):
     needs -- so it can be written to a sidecar file and read back by a
     later run of the OTHER source (see generate_mobile_html)."""
     out = {}
+    sudfoehn_warning_threshold = CONFIG["settings"].get("sudfoehn_warning_threshold_hpa", 3.0)
     for date_str, data in days_data.items():
         df = data["df"]
         obs_hourly = data.get("obs_hourly") or {}
         go = False
         rows = []
+
+        # Strong-Sudfoehn caveat for this day -- same helper/threshold as
+        # generate_day_graph's plot marker and wingfoil_predictor.py's
+        # Table 1 / plots / 5-day outlook, so the wording and trigger point
+        # match everywhere. Stored as plain text (or None) so it survives
+        # the JSON sidecar round-trip and generate_mobile_html can render
+        # it without recomputing anything.
+        sudfoehn_extreme = sudfoehn_daily_extreme(df)
+        sudfoehn_warning = format_sudfoehn_warning(sudfoehn_extreme, threshold_hpa=sudfoehn_warning_threshold)
         for ts, row in df.iterrows():
             if not (10 <= ts.hour <= 19):
                 continue
@@ -960,6 +993,7 @@ def _serialize_days_data(days_data):
             "graph_name": data["graph_name"],
             "go": go,
             "rows": rows,
+            "sudfoehn_warning": sudfoehn_warning,
         }
     return out
 

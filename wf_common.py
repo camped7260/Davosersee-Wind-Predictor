@@ -72,6 +72,15 @@ DEFAULT_CONFIG = {
         # calibration_db.csv grows to see whether the picture firms up.
         "nordfoehn_threshold_hpa": 3.5,
         "sudfoehn_threshold_hpa": 1.5,
+        # Separate, stricter cutoff (positive magnitude, same sign
+        # convention as sudfoehn_threshold_hpa above) used only to trigger
+        # the "strong Sudfoehn -- station may understate lake wind" warning
+        # in Table 1, the plots, and the 5-day outlook (see
+        # sudfoehn_daily_extreme/format_sudfoehn_warning below). Kept apart
+        # from sudfoehn_threshold_hpa (1.5), which just decides regime
+        # bucketing -- that value is far too low to mean "strong" and would
+        # fire the warning on almost every Sudfoehn day.
+        "sudfoehn_warning_threshold_hpa": 3.0,
     },
     "locations": {
         "davos": {"lat": 46.8041, "lon": 9.8372, "station_id": "06784", "ms_station_abbr": "DAV"}
@@ -238,6 +247,77 @@ def describe_weather_code(w_code):
     if w_code is None or (isinstance(w_code, float) and pd.isna(w_code)):
         return "N/A"
     return WMO_WEATHER_CODES.get(int(w_code), f"Code {int(w_code)}")
+
+
+# =====================================================================
+# STRONG SUDFOEHN WARNING (station vs. lake wind mismatch)
+# =====================================================================
+# mosmix_dp_foehn follows the ZH - LU convention (see foehn_gradient.py /
+# CategorizedWindCorrectionPipeline._prepare_features): negative = Sudfoehn,
+# more negative = stronger. The MS/DSSC station readings are known to
+# understate lake wind specifically once Sudfoehn gets strong (unlike
+# ordinary/weak Sudfoehn, where the station is a reasonable proxy) -- these
+# two helpers find the day's most negative dp_foehn value and turn it into a
+# single warning string wherever a strong Sudfoehn threshold is crossed, so
+# the caveat is worded identically in Table 1, the plots, and the 5-day
+# outlook instead of drifting between call sites.
+
+def sudfoehn_daily_extreme(df, dp_col="mosmix_dp_foehn", time_col=None, time_fmt="%H:%M"):
+    """Finds the most negative (strongest Sudfoehn) dp_col value in df.
+
+    time_col=None (default) reads the time label/position off df's index,
+    which must be datetime-like (used by analyze_day / analyze_day_replay /
+    analyze_5_day_outlook, all indexed by timestamp). Pass time_col to read
+    it from an integer hour column instead (used by
+    export_regime_backtests_and_csvs's per-regime subplots, which are
+    indexed by row position with a separate 'hour_int' column).
+
+    Returns None if dp_col is missing or entirely NaN for this df, else a
+    dict {"min_dp": float, "time_label": str, "hour_float": float or None}
+    -- hour_float is the x-position (local hour, fractional) to use for
+    plot annotations, None only if it couldn't be derived.
+    """
+    if df is None or len(df) == 0 or dp_col not in df.columns:
+        return None
+    series = df[dp_col].dropna()
+    if series.empty:
+        return None
+    idx_min = series.idxmin()
+    min_val = float(series.loc[idx_min])
+
+    if time_col is not None and time_col in df.columns:
+        raw_hour = df.loc[idx_min, time_col]
+        try:
+            hour_float = float(raw_hour)
+            time_label = f"{int(raw_hour):02d}:00"
+        except (TypeError, ValueError):
+            hour_float = None
+            time_label = str(raw_hour)
+    else:
+        try:
+            time_label = idx_min.strftime(time_fmt)
+            hour_float = idx_min.hour + idx_min.minute / 60.0
+        except AttributeError:
+            time_label = str(idx_min)
+            hour_float = None
+
+    return {"min_dp": min_val, "time_label": time_label, "hour_float": hour_float}
+
+
+def format_sudfoehn_warning(extreme, threshold_hpa=3.0, prefix="⚠️"):
+    """Builds the strong-Sudfoehn caveat line from sudfoehn_daily_extreme's
+    output, or returns None if there's no extreme or it doesn't clear
+    threshold_hpa (a positive magnitude, e.g. 3.0 -> triggers below -3.0
+    hPa, matching sudfoehn_threshold_hpa's sign convention in config.json)."""
+    if not extreme:
+        return None
+    if extreme["min_dp"] >= -abs(threshold_hpa):
+        return None
+    return (
+        f"{prefix} Südfoehn marqué : dp Foehn min {extreme['min_dp']:+.1f} hPa "
+        f"à {extreme['time_label']} -- le vent du lac peut dépasser la lecture "
+        f"station (MS/DSSC) en cas de Südfoehn fort."
+    )
 
 
 # =====================================================================

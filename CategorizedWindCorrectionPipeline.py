@@ -1403,7 +1403,7 @@ class CategorizedWindCorrectionPipeline:
         export_time_str = now_local.strftime("%Y-%m-%d %H:%M:%S %Z")
 
         export_data = {
-            "version": "MOSMIX_V27",
+            "version": "MOSMIX_V28",
             "updated_at": export_time_str,
             "global_fallback_bias": self.global_fallback_bias,
             "global_std_bias": self.global_std_bias,
