@@ -1,14 +1,15 @@
 {
     "version": "MOSMIX_V28",
-    "updated_at": "2026-09-10 09:00:33 CEST",
-    "global_fallback_bias": 0.4872559774144233,
-    "global_std_bias": 2.7890154978001522,
-    "global_fx1_fallback_bias": -1.9661771479830359,
-    "global_fx1_std_bias": 4.237032155293917,
+    "updated_at": "2026-09-11 10:36:30 CEST",
+    "global_fallback_bias": 0.4129144411869206,
+    "global_std_bias": 2.8205892212409167,
+    "global_fx1_fallback_bias": -2.05332429232781,
+    "global_fx1_std_bias": 4.245054626594895,
     "category_mean_offsets": {
         "Cloudy": 0.909022578368496,
         "Cloudy + Precip(Rain_LowConf)": 5.59968893189345,
-        "NordFoehn + Cloudy": 0.05721819616630386,
+        "NordFoehn + Cloudy": -1.0932213408207359,
+        "NordFoehn + Cloudy + Precip(Rain_LowConf)": -4.3412691,
         "NordFoehn + Cloudy + Precip(Thunderstorm_LowConf)": 1.98090998070554,
         "NordFoehn + PartlyCloudy": -0.41785904242424315,
         "NordFoehn + Sunny": -0.7769496468826601,
@@ -26,7 +27,8 @@
     "category_std_offsets": {
         "Cloudy": 1.952307746622463,
         "Cloudy + Precip(Rain_LowConf)": 0.0,
-        "NordFoehn + Cloudy": 3.7569592922777817,
+        "NordFoehn + Cloudy": 3.376410216897597,
+        "NordFoehn + Cloudy + Precip(Rain_LowConf)": 2.0984099424278413,
         "NordFoehn + Cloudy + Precip(Thunderstorm_LowConf)": 0.0,
         "NordFoehn + PartlyCloudy": 2.434383086751221,
         "NordFoehn + Sunny": 1.0631471808939135,
@@ -44,7 +46,8 @@
     "category_fx1_mean_offsets": {
         "Cloudy": 0.2606448425319996,
         "Cloudy + Precip(Rain_LowConf)": 12.578775920518398,
-        "NordFoehn + Cloudy": -4.6782129479481505,
+        "NordFoehn + Cloudy": -5.2653506756604,
+        "NordFoehn + Cloudy + Precip(Rain_LowConf)": -7.0561783999999985,
         "NordFoehn + Cloudy + Precip(Thunderstorm_LowConf)": 0.36067034470842074,
         "NordFoehn + PartlyCloudy": -2.4459420946593315,
         "NordFoehn + Sunny": -2.795290213736489,
@@ -62,7 +65,8 @@
     "category_fx1_std_offsets": {
         "Cloudy": 3.2118231605383385,
         "Cloudy + Precip(Rain_LowConf)": 0.0,
-        "NordFoehn + Cloudy": 4.23916242217182,
+        "NordFoehn + Cloudy": 3.40725801472244,
+        "NordFoehn + Cloudy + Precip(Rain_LowConf)": 2.1992084383500545,
         "NordFoehn + Cloudy + Precip(Thunderstorm_LowConf)": 0.0,
         "NordFoehn + PartlyCloudy": 2.8709908270987583,
         "NordFoehn + Sunny": 1.95211549058885,
@@ -96,6 +100,27 @@
             "sigma": [
                 [
                     0.0004652863483497792
+                ]
+            ]
+        },
+        "NordFoehn + Cloudy": {
+            "features": [
+                "mosmix_ff_kt"
+            ],
+            "scaler_mean": [
+                7.9248861538461535
+            ],
+            "scaler_scale": [
+                0.9968517416244533
+            ],
+            "coef": [
+                0.9186145448845505
+            ],
+            "intercept": -2.2210950950363624,
+            "alpha": 0.27585341982031897,
+            "sigma": [
+                [
+                    0.12596977247739294
                 ]
             ]
         },
@@ -303,6 +328,27 @@
             "sigma": [
                 [
                     0.4044307820792097
+                ]
+            ]
+        },
+        "NordFoehn + Cloudy": {
+            "features": [
+                "mosmix_ff_kt"
+            ],
+            "scaler_mean": [
+                7.9248861538461535
+            ],
+            "scaler_scale": [
+                0.9968517416244533
+            ],
+            "coef": [
+                0.001013810414914886
+            ],
+            "intercept": -5.2653506756604,
+            "alpha": 0.0933107797881302,
+            "sigma": [
+                [
+                    0.0015932346901214498
                 ]
             ]
         },
