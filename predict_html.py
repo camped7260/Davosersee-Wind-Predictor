@@ -774,6 +774,8 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
         th {{ background: #f8fafc; color: #64748b; font-weight: 600; }}
         .source-section {{ display: none; }}
         .source-section.active {{ display: block; }}
+        .hits-counter {{ display: inline-block; vertical-align: middle; }}
+        .hits-counter img {{ width: auto; margin: 0 0 0 6px; vertical-align: middle; }}
     </style>
 </head>
 <body>
@@ -790,7 +792,10 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
     version_info_by_source = {}
     for label in sources.keys():
         version_info_by_source[label] = (
-            f"Built: {build_times.get(label, 'Unknown')}<br>"
+            f"Built: {build_times.get(label, 'Unknown')} "
+            f'<a href="https://hitscounter.dev" class="hits-counter">'
+            f'<img src="https://hitscounter.dev/api/hit?url=https%3A%2F%2Fcamped7260.github.io%2FDavosersee-Wind-Predictor%2F&label=visits&icon=activity&color=%23198754" alt="visits"/>'
+            f"</a><br>"
             f"Weights: {versions.get(label, 'Unknown')} "
             f"({weights_updates.get(label, 'Unknown')}) "
             f"— {label}"
