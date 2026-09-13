@@ -199,14 +199,14 @@ def plot_foehn_gradient(records):
     plt.figure(figsize=(12, 6))
     
     # Label corrigé : c'est bien Zurich - Lugano
-    plt.plot(dates, dp, label=r'$\Delta p$ Zurich - Lugano (Nordfoehn si > 0)', color='#2c3e50', linewidth=2.5, zorder=4)
+    plt.plot(dates, dp, label=r'$\Delta p$ Zurich - Lugano', color='#2c3e50', linewidth=2.5, zorder=4)
     plt.axhline(0, color='black', linestyle='-', linewidth=1, zorder=2)
     
     # Seuils inversés pour correspondre à la réalité physique : Positif = Nord / Négatif = Sud
-    plt.axhline(3.5, color='#e74c3c', linestyle='--', alpha=0.8, label='Seuil Nordfoehn (+3.5 hPa)', zorder=2)
+    plt.axhline(3.5, color='#e74c3c', linestyle='--', alpha=0.8, label='dp = +3.5 hPa', zorder=2)
 
     # Surlignage des phases actives
-    plt.fill_between(dates, dp, 3.5, where=[val > 3.5 for val in dp], facecolor='#e74c3c', alpha=0.25, label='Nordfoehn actif')
+    plt.fill_between(dates, dp, 3.5, where=[val > 3.5 for val in dp], facecolor='#e74c3c', alpha=0.25, label='Nordfoehn!')
 
     ax = plt.gca()
     ax.xaxis.set_major_locator(mdates.DayLocator(interval=1)) 
@@ -218,8 +218,8 @@ def plot_foehn_gradient(records):
     plt.grid(True, which='major', linestyle='-', alpha=0.5, zorder=1)
     plt.grid(True, which='minor', linestyle=':', alpha=0.2, zorder=1)
 
-    plt.title("Prévision du Gradient de Pression Alpin (Zurich - Lugano) — Alignement Davos", fontsize=13, fontweight='bold', pad=15)
-    plt.xlabel("Date (Ticks à Minuit)", fontsize=11, labelpad=10)
+    plt.title("Pressure difference (Zurich - Lugano)", fontsize=13, fontweight='bold', pad=15)
+    plt.xlabel("Date", fontsize=11, labelpad=10)
     plt.ylabel(r"$\Delta p$ (hPa)", fontsize=11)
     plt.legend(loc='upper left', framealpha=0.95)
     
