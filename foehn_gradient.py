@@ -231,7 +231,7 @@ def plot_foehn_gradient(records, save_path=None):
     plt.gcf().autofmt_xdate()
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path)
+        plt.savefig(save_path, dpi=150)
         plt.close()
     else:
         plt.show()

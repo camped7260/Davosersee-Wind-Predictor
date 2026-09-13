@@ -790,7 +790,7 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
         .bg-go {{ background: #22c55e; }}
         .bg-nogo {{ background: #ef4444; }}
         .sudfoehn-banner {{ background: #f3e8ff; color: #6b21a8; border: 1px solid #d8b4fe; border-radius: 8px; padding: 6px 10px; font-size: 0.72rem; margin: 0 0 8px 0; line-height: 1.35; }}
-        img {{ width: 100%; border-radius: 6px; margin: 8px 0; }}
+        img {{ width: 100%; border-radius: 6px; margin: 8px 0; image-rendering: -webkit-optimize-contrast; image-rendering: smooth; }}
         table {{ width: 100%; border-collapse: collapse; font-size: 0.72rem; margin-top: 8px; white-space: nowrap; }}
         th, td {{ padding: 6px 4px; text-align: center; border-bottom: 1px solid #f1f5f9; }}
         th {{ background: #f8fafc; color: #64748b; font-weight: 600; }}
@@ -1159,30 +1159,49 @@ def main():
         if records:
             foehn_records.extend(records)
 
+    # Fetches for different target_dates can return overlapping
+    # timestamps (e.g. a MOSMIX_L run covers more than just its target
+    # day), so foehn_records can contain the same datetime more than
+    # once -- sometimes with a slightly different dp_foehn value if the
+    # underlying MOSMIX run changed between fetches. Deduplicate ONCE
+    # here (by datetime, first occurrence wins) and reuse this single
+    # cleaned list for both the df_combined feature and the plot below,
+    # rather than deduplicating only for one and not the other -- the
+    # bug that previously made the saved foehn plot look "hatched"
+    # compared to a plain matplotlib save was exactly this: the plot
+    # used the raw, non-deduplicated foehn_records while df_combined
+    # used a deduplicated copy, so the plot silently had many more,
+    # near-duplicate points crammed into the same time span.
     if foehn_records:
-        df_foehn = (
+        foehn_records = (
             pd.DataFrame(foehn_records)
             .drop_duplicates(subset=["datetime"], keep="first")
-            .set_index("datetime")
+            .sort_values("datetime")
+            .to_dict("records")
         )
+
+    if foehn_records:
+        df_foehn = pd.DataFrame(foehn_records).set_index("datetime")
         df_combined["mosmix_dp_foehn"] = df_combined.index.map(df_foehn["dp_foehn"])
     else:
         df_combined["mosmix_dp_foehn"] = np.nan
 
     # Foehn gradient plot (Zurich - Lugano pressure difference over the
-    # same 3-day window as the daily wind plots), rendered from the exact
-    # records just fetched above via foehn_gradient.get_combined_data_foehn_gradient
-    # -- reusing foehn_gradient.plot_foehn_gradient (its own main() plotting
-    # routine) rather than reimplementing the chart here, so this figure is
-    # always identical to what `python foehn_gradient.py` would show
-    # interactively. Always saved as "foehn.png" (no _dssc suffix, unlike
-    # the daily plots): the foehn gradient is a single shared chart, not
-    # tied to the MS/DSSC observation toggle, so both runs intentionally
-    # target the same file rather than keeping separate copies.
-    foehn_records_sorted = sorted(foehn_records, key=lambda r: r["datetime"]) if foehn_records else []
+    # same 3-day window as the daily wind plots), rendered from the same
+    # deduplicated, sorted records used for df_combined above -- reusing
+    # foehn_gradient.plot_foehn_gradient (its own main() plotting
+    # routine) rather than reimplementing the chart here, so this figure
+    # is always identical to what `python foehn_gradient.py` would show
+    # interactively (modulo the dedup fix above, which foehn_gradient.py's
+    # own single-target_date main() never needed since it never fetches
+    # overlapping dates). Always saved as "foehn.png" (no _dssc suffix,
+    # unlike the daily plots): the foehn gradient is a single shared
+    # chart, not tied to the MS/DSSC observation toggle, so both runs
+    # intentionally target the same file rather than keeping separate
+    # copies.
     foehn_img_name = "foehn.png"
-    if foehn_records_sorted:
-        plot_foehn_gradient(foehn_records_sorted, save_path=foehn_img_name)
+    if foehn_records:
+        plot_foehn_gradient(foehn_records, save_path=foehn_img_name)
     else:
         print("⚠️ Warning: no foehn gradient records available -- skipping foehn plot for this run.")
         foehn_img_name = None
