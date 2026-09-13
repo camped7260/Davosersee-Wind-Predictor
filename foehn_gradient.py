@@ -188,8 +188,13 @@ def get_combined_data_foehn_gradient(target_date, stations=None):
     return combined_records
 
 
-def plot_foehn_gradient(records):
-    """ Fonction Plot Corrigée : Alignée sur la physique réelle ZH - LU """
+def plot_foehn_gradient(records, save_path=None):
+    """ Fonction Plot Corrigée : Alignée sur la physique réelle ZH - LU
+
+    save_path: si fourni, la figure est enregistrée à ce chemin (via
+    savefig) et la figure est fermée, plutôt que d'ouvrir une fenêtre
+    interactive avec plt.show() -- utilisé par predict_html.py pour
+    intégrer ce graphe au dashboard statique généré."""
     if not records:
         return
         
@@ -225,7 +230,11 @@ def plot_foehn_gradient(records):
     
     plt.gcf().autofmt_xdate()
     plt.tight_layout()
-    plt.show()
+    if save_path:
+        plt.savefig(save_path)
+        plt.close()
+    else:
+        plt.show()
 
 
 # --- Exécution principale ---

@@ -35,7 +35,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import matplotlib.pyplot as plt
 
-from foehn_gradient import get_combined_data_foehn_gradient
+from foehn_gradient import get_combined_data_foehn_gradient, plot_foehn_gradient
 from CategorizedWindCorrectionPipeline import CategorizedWindCorrectionPipeline
 from ecowitt import get_ecowitt_data, extract_weather_timeseries
 
@@ -680,7 +680,7 @@ def generate_day_graph(date_str, df_day, output_path, build_time_str=None, obs_h
 # HTML DASHBOARD GENERATOR
 # =====================================================================
 
-def generate_mobile_html(days_data, output_file="index.html", source_label="MS", sidecar_path=None):
+def generate_mobile_html(days_data, output_file="index.html", source_label="MS", sidecar_path=None, foehn_img_name=None):
     """Renders index.html from days_data (this run's rows), persists this
     run's data to sidecar_path so a later run of the OTHER source can pick
     it back up, and loads that other source's sidecar (if present) so a
@@ -702,6 +702,14 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
     loaded with ?umami=0 in the URL, so a visitor's browser (not this
     generator run) decides whether the tag is added, e.g. for opting
     out of analytics on a given visit without needing a rebuild.
+
+    foehn_img_name: filename of this run's foehn gradient plot (see
+    main()'s plot_foehn_gradient call). The foehn pressure gradient does
+    NOT depend on the MS/DSSC observation source -- it's one shared plot,
+    shown in its own tab regardless of which source is toggled. If this
+    run didn't produce one (e.g. the foehn fetch failed), the other
+    source's last sidecar is checked as a fallback so the tab isn't
+    empty.
     """
     version_str, weights_updated, build_time_str = get_formatted_version_and_build()
 
@@ -718,6 +726,7 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
                     "version_str": version_str,
                     "weights_updated": weights_updated,
                     "days": serializable,
+                    "foehn_img_name": foehn_img_name,
                 }, f, indent=2)
         except Exception as e:
             print(f"⚠️ Warning: could not write sidecar {sidecar_path}: {e}")
@@ -744,6 +753,13 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
         build_times[other_label] = other_payload.get("build_time_str", "Unknown")
         versions[other_label] = other_payload.get("version_str", "Unknown")
         weights_updates[other_label] = other_payload.get("weights_updated", "Unknown")
+
+    # The foehn plot is shared across sources (not per-MS/DSSC), so this
+    # run's own image wins if present; otherwise fall back to whatever
+    # the other source's last sidecar recorded, so the Foehn tab isn't
+    # left empty just because this particular run's fetch failed.
+    if not foehn_img_name and other_payload:
+        foehn_img_name = other_payload.get("foehn_img_name")
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -802,8 +818,8 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
     <div class="header">
         <h1>🏄 Davosersee Wind Forecast (experimental)</h1>
         <div class="version" id="version-info"></div>
-        <div class="source-toggle" id="source-toggle" style="display: none;">
-            <a href="?src=ms&dssc=1" data-src="MS">MS (MeteoSwiss)</a><a href="?src=dssc&dssc=1" data-src="DSSC">DSSC</a>
+        <div class="source-toggle" id="source-toggle">
+            <a href="?src=ms&dssc=1" data-src="MS">MS (MeteoSwiss)</a><a href="?src=dssc&dssc=1" data-src="DSSC" id="dssc-toggle-link" style="display: none;">DSSC</a><a href="?src=foehn" data-src="FOEHN">Foehn</a>
         </div>
     </div>
     <div id="scroll-frame">
@@ -885,6 +901,30 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
         html_content += """
     </div>"""
 
+    # Foehn gradient tab: a third .source-section, independent of the
+    # MS/DSSC observation toggle above -- the pressure-gradient chart is
+    # a single shared plot that doesn't depend on which observation
+    # source is active, so it gets exactly one card, not one per source.
+    html_content += """
+    <div class="source-section" data-src="FOEHN">
+"""
+    if foehn_img_name:
+        html_content += f"""
+        <div class="day-card">
+            <div class="day-title">
+                <span>Foehn Gradient (Zurich - Lugano)</span>
+            </div>
+            <img src="{foehn_img_name}" alt="Foehn Pressure Gradient">
+        </div>"""
+    else:
+        html_content += """
+        <div class="day-card">
+            <div class="day-title"><span>Foehn Gradient (Zurich - Lugano)</span></div>
+            <p>No foehn gradient plot available yet.</p>
+        </div>"""
+    html_content += """
+    </div>"""
+
     html_content += """
     </div>
 """
@@ -896,37 +936,54 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
         const versionInfo = {version_info_json};
         const params = new URLSearchParams(window.location.search);
         let src = (params.get('src') || 'ms').toLowerCase();
-        let activeLabel = src === 'dssc' ? 'DSSC' : 'MS';
+        let activeLabel = src === 'dssc' ? 'DSSC' : (src === 'foehn' ? 'FOEHN' : 'MS');
         const scrollFrame = document.getElementById('scroll-frame');
 
-        // The MS/DSSC toggle buttons are opt-in: only shown when the
-        // page is loaded with ?dssc=1, so casual visitors don't see a
-        // switch for a data source they haven't asked to see.
+        // MS and Foehn are always available. DSSC is opt-in: its button
+        // is only shown when the page is loaded with ?dssc=1, so casual
+        // visitors don't see a switch for a data source they haven't
+        // asked to see. So the toggle bar reads MS, Foehn with dssc=0,
+        // and MS, DSSC, Foehn (in that order) with dssc=1.
         const toggleEl = document.getElementById('source-toggle');
+        const dsscLinkEl = document.getElementById('dssc-toggle-link');
         const dsscParam = params.get('dssc') === '1';
-        if (toggleEl) {{
-            toggleEl.style.display = dsscParam ? '' : 'none';
+        if (dsscLinkEl) {{
+            dsscLinkEl.style.display = dsscParam ? '' : 'none';
+        }}
+        // If DSSC got hidden but was somehow the active tab (e.g. a
+        // stale/hand-edited URL with src=dssc&dssc=0), fall back to MS
+        // rather than leaving every tab looking inactive.
+        if (activeLabel === 'DSSC' && !dsscParam) {{
+            activeLabel = 'MS';
         }}
 
         function applyActiveSource(label) {{
             document.querySelectorAll('.source-section').forEach(el => {{
                 el.classList.toggle('active', el.getAttribute('data-src') === label);
             }});
-            document.querySelectorAll('.source-toggle a').forEach(el => {{
+            document.querySelectorAll('#source-toggle a').forEach(el => {{
                 el.classList.toggle('active', el.getAttribute('data-src') === label);
             }});
+            // The Foehn tab isn't tied to an MS/DSSC weights build, so it
+            // has no entry in versionInfo -- leave the header's version
+            // line showing whichever MS/DSSC info was already there
+            // rather than blanking it out.
             const versionEl = document.getElementById('version-info');
-            if (versionEl) {{
-                versionEl.innerHTML = versionInfo[label] || versionInfo['MS'] || '';
+            if (versionEl && versionInfo[label]) {{
+                versionEl.innerHTML = versionInfo[label];
             }}
         }}
 
+        const versionEl0 = document.getElementById('version-info');
+        if (versionEl0) {{
+            versionEl0.innerHTML = versionInfo[activeLabel] || versionInfo['MS'] || '';
+        }}
         applyActiveSource(activeLabel);
 
-        // Switching MS<->DSSC is handled entirely client-side (no page
-        // reload) so the SAME #scroll-frame element -- shared by both
+        // Switching MS<->DSSC<->Foehn is handled entirely client-side (no
+        // page reload) so the SAME #scroll-frame element -- shared by all
         // .source-section divs -- keeps whatever scrollTop the visitor
-        // was already at. That is what makes the two views directly
+        // was already at. That is what makes the views directly
         // comparable: scrolling to, say, tomorrow's graph in MS and then
         // switching to DSSC lands on tomorrow's graph in DSSC too,
         // instead of resetting to the top the way a normal link
@@ -939,10 +996,18 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
                     if (label === activeLabel) return;
                     activeLabel = label;
                     applyActiveSource(activeLabel);
-                    const newSrc = label === 'DSSC' ? 'dssc' : 'ms';
+                    const newSrc = label === 'DSSC' ? 'dssc' : (label === 'FOEHN' ? 'foehn' : 'ms');
                     const url = new URL(window.location.href);
                     url.searchParams.set('src', newSrc);
-                    url.searchParams.set('dssc', '1');
+                    // Only switching TO DSSC itself needs ?dssc=1 forced
+                    // on (so its button stays visible/selected after the
+                    // URL updates). Switching to MS or Foehn must leave
+                    // dssc= exactly as it already was -- otherwise a
+                    // visitor who never asked for DSSC would see dssc=1
+                    // appear in the URL just from clicking MS or Foehn.
+                    if (label === 'DSSC') {{
+                        url.searchParams.set('dssc', '1');
+                    }}
                     window.history.replaceState({{}}, '', url);
                     // scrollFrame.scrollTop is untouched by the section
                     // toggle above (display:none/block on a child doesn't
@@ -1104,6 +1169,24 @@ def main():
     else:
         df_combined["mosmix_dp_foehn"] = np.nan
 
+    # Foehn gradient plot (Zurich - Lugano pressure difference over the
+    # same 3-day window as the daily wind plots), rendered from the exact
+    # records just fetched above via foehn_gradient.get_combined_data_foehn_gradient
+    # -- reusing foehn_gradient.plot_foehn_gradient (its own main() plotting
+    # routine) rather than reimplementing the chart here, so this figure is
+    # always identical to what `python foehn_gradient.py` would show
+    # interactively. Always saved as "foehn.png" (no _dssc suffix, unlike
+    # the daily plots): the foehn gradient is a single shared chart, not
+    # tied to the MS/DSSC observation toggle, so both runs intentionally
+    # target the same file rather than keeping separate copies.
+    foehn_records_sorted = sorted(foehn_records, key=lambda r: r["datetime"]) if foehn_records else []
+    foehn_img_name = "foehn.png"
+    if foehn_records_sorted:
+        plot_foehn_gradient(foehn_records_sorted, save_path=foehn_img_name)
+    else:
+        print("⚠️ Warning: no foehn gradient records available -- skipping foehn plot for this run.")
+        foehn_img_name = None
+
     if df_combined["mosmix_dp_foehn"].isna().any():
         missing = int(df_combined["mosmix_dp_foehn"].isna().sum())
         print(f"⚠️ Warning: mosmix_dp_foehn missing for {missing} row(s); falling back to proxy (mosmix_u_kt * 0.4) for those rows.")
@@ -1193,7 +1276,8 @@ def main():
 
     generate_mobile_html(
         days_data, "index.html",
-        source_label=source_label, sidecar_path=SIDECAR_PATHS[source_label]
+        source_label=source_label, sidecar_path=SIDECAR_PATHS[source_label],
+        foehn_img_name=foehn_img_name
     )
 
 if __name__ == "__main__":
