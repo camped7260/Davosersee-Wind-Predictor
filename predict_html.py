@@ -696,6 +696,12 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
     sources' data/markup either way), enforced client-side in the
     <script> block below since this HTML is generated once and then
     served as-is, so there's no per-request server logic to gate it at.
+
+    The Umami analytics script is likewise injected client-side rather
+    than baked into the static HTML: it is added unless the page is
+    loaded with ?umami=0 in the URL, so a visitor's browser (not this
+    generator run) decides whether the tag is added, e.g. for opting
+    out of analytics on a given visit without needing a rebuild.
     """
     version_str, weights_updated, build_time_str = get_formatted_version_and_build()
 
@@ -775,7 +781,22 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
         .source-section {{ display: none; }}
         .source-section.active {{ display: block; }}
     </style>
-    <script defer src="https://cloud.umami.is/script.js" data-website-id="5346275b-dfd2-432e-8c03-aa15b4995a1d"></script>
+    <script>
+        // Umami analytics is opt-out via URL: add ?umami=0 to a visit to
+        // skip loading the tracker for that page load. Any other value
+        // (or the parameter being absent) keeps the default of loading
+        // it, matching this dashboard's default-on analytics.
+        (function() {{
+            var params = new URLSearchParams(window.location.search);
+            if (params.get('umami') !== '0') {{
+                var s = document.createElement('script');
+                s.defer = true;
+                s.src = 'https://cloud.umami.is/script.js';
+                s.setAttribute('data-website-id', '5346275b-dfd2-432e-8c03-aa15b4995a1d');
+                document.head.appendChild(s);
+            }}
+        }})();
+    </script>
 </head>
 <body>
     <div class="header">
