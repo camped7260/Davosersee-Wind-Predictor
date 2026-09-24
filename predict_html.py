@@ -912,14 +912,14 @@ def generate_mobile_html(days_data, output_file="index.html", source_label="MS",
         html_content += f"""
         <div class="day-card">
             <div class="day-title">
-                <span>Foehn Gradient (Zurich - Lugano)</span>
+                <span>Foehn Gradient (Zurich - Lugano / Chur - Lugano)</span>
             </div>
             <img src="{foehn_img_name}" alt="Foehn Pressure Gradient">
         </div>"""
     else:
         html_content += """
         <div class="day-card">
-            <div class="day-title"><span>Foehn Gradient (Zurich - Lugano)</span></div>
+            <div class="day-title"><span>Foehn Gradient (Zurich - Lugano / Chur - Lugano)</span></div>
             <p>No foehn gradient plot available yet.</p>
         </div>"""
     html_content += """

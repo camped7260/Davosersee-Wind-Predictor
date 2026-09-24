@@ -1,4 +1,9 @@
 {
+    "foehn_stations": {
+        "Zurich": "06660",
+        "Lugano": "06770",
+        "Chur": "06786"
+    },
     "settings": {
         "timezone": "Europe/Zurich",
         "wind_threshold_knots": 10.0,

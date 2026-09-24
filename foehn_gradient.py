@@ -13,10 +13,16 @@ import matplotlib.dates as mdates
 
 CONFIG_FILE = "config.json"
 
-# Fallback si config.json est absent ou ne contient pas 'foehn_stations'
+# Fallback si config.json est absent ou ne contient pas 'foehn_stations'.
+# "Chur" est optionnelle : elle alimente uniquement la 2e courbe de
+# gradient (Chur - Lugano, indicateur de Sudfoehn côté Grisons/Rhin) --
+# la courbe principale Zurich - Lugano (qui nourrit mosmix_dp_foehn)
+# continue de fonctionner même si "Chur" est absente d'un config.json
+# personnalisé.
 DEFAULT_STATIONS = {
     "Zurich": "06660",
-    "Lugano": "06770"
+    "Lugano": "06770",
+    "Chur": "06786"
 }
 
 DEFAULT_TIMEZONE = "Europe/Zurich"
@@ -153,6 +159,16 @@ def get_combined_data_foehn_gradient(target_date, stations=None):
         print("\n❌ Impossible de récupérer les données des deux stations.")
         return []
 
+    # Chur est optionnelle : elle ne fait que fournir la 2e courbe
+    # (Chur - Lugano). Si sa station est absente de `stations` (config
+    # personnalisé sans "Chur") ou si son téléchargement échoue, on
+    # continue quand même avec dp_foehn_chur=None pour chaque
+    # enregistrement plutôt que d'abandonner tout le run -- la courbe
+    # principale Zurich - Lugano (dp_foehn) ne doit jamais dépendre de
+    # la disponibilité de Chur.
+    chur_id = stations.get("Chur")
+    dict_chur = fetch_station_data(chur_id, "Chur", target_date) if chur_id else None
+
     common_timestamps = sorted(list(set(dict_zh.keys()).intersection(set(dict_lu.keys()))))
     combined_records = []
 
@@ -175,6 +191,12 @@ def get_combined_data_foehn_gradient(target_date, stations=None):
             
             dp_zh_lu = p_zh - p_lu
             dp_lu_zh = p_lu - p_zh
+
+            # Chur - Lugano : même principe que Zurich - Lugano, mais
+            # reste None pour ce timestamp si Chur n'a pas de valeur
+            # à ce pas de temps (ou si la station n'est pas configurée).
+            p_chur = dict_chur.get(ts) if dict_chur else None
+            dp_chur_lu = (p_chur - p_lu) if p_chur is not None else None
             
             #print(f"{dt.strftime('%Y-%m-%d')}, {dt.strftime('%H:%M')}, {p_zh:.1f} hPa, {p_lu:.1f} hPa, {dp_zh_lu:+.1f} hPa, {dp_lu_zh:+.1f} hPa")
             
@@ -182,7 +204,9 @@ def get_combined_data_foehn_gradient(target_date, stations=None):
                 'datetime': dt,
                 'p_zh': p_zh,
                 'p_lu': p_lu,
-                'dp_foehn': dp_zh_lu  
+                'p_chur': p_chur,
+                'dp_foehn': dp_zh_lu,
+                'dp_foehn_chur': dp_chur_lu
             })
             
     return combined_records
@@ -200,11 +224,26 @@ def plot_foehn_gradient(records, save_path=None):
         
     dates = [r['datetime'] for r in records]
     dp = [r['dp_foehn'] for r in records] # Contient p_lu - p_zh
+
+    # Chur - Lugano : 2e courbe, optionnelle. dp_foehn_chur peut être
+    # absent (anciens records générés avant cet ajout) ou None pour
+    # certains points (Chur non configurée / pas de valeur à ce pas de
+    # temps) -- on convertit ces trous en NaN pour laisser matplotlib
+    # dessiner une coupure dans la ligne plutôt que planter ou dériver
+    # vers 0. La courbe n'est tracée que s'il reste au moins un point
+    # exploitable.
+    dp_chur_raw = [r.get('dp_foehn_chur') for r in records]
+    has_chur = any(v is not None for v in dp_chur_raw)
+    dp_chur = [float('nan') if v is None else v for v in dp_chur_raw]
     
     plt.figure(figsize=(12, 6))
     
     # Label corrigé : c'est bien Zurich - Lugano
     plt.plot(dates, dp, label=r'$\Delta p$ Zurich - Lugano', color='#2c3e50', linewidth=2.5, zorder=4)
+
+    if has_chur:
+        plt.plot(dates, dp_chur, label=r'$\Delta p$ Chur - Lugano', color='#8e44ad', linewidth=2, linestyle='-.', zorder=3)
+
     plt.axhline(0, color='black', linestyle='-', linewidth=1, zorder=2)
     
     # Seuils inversés pour correspondre à la réalité physique : Positif = Nord / Négatif = Sud
@@ -223,7 +262,8 @@ def plot_foehn_gradient(records, save_path=None):
     plt.grid(True, which='major', linestyle='-', alpha=0.5, zorder=1)
     plt.grid(True, which='minor', linestyle=':', alpha=0.2, zorder=1)
 
-    plt.title("Pressure difference (Zurich - Lugano)", fontsize=13, fontweight='bold', pad=15)
+    title = "Pressure difference (Zurich - Lugano / Chur - Lugano)" if has_chur else "Pressure difference (Zurich - Lugano)"
+    plt.title(title, fontsize=13, fontweight='bold', pad=15)
     plt.xlabel("Date", fontsize=11, labelpad=10)
     plt.ylabel(r"$\Delta p$ (hPa)", fontsize=11)
     plt.legend(loc='upper left', framealpha=0.95)
